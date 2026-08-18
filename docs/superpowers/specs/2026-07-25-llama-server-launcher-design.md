@@ -108,7 +108,7 @@ App 不自行维护默认值，避免版本漂移。每个参数带 tooltip（--
 | 分组 | 参数 |
 |---|---|
 | 模型 | 模型文件（扫描/手动）、--alias、--mmproj（可选，带浏览按钮） |
-| 服务 | 可见端口（默认 8080）、--host（默认 127.0.0.1）、--api-key、--timeout（默认 600）、--jinja（默认开）、--ui WebUI 开关（默认开，代理透传后自带 WebUI 同端口可访问） |
+| 服务 | 可见端口（默认 8080）、--host（**代理**监听地址，默认 127.0.0.1，填 0.0.0.0 允许局域网访问；server 自身永远绑 127.0.0.1，见 §5.3）、--api-key、--timeout（默认 600）、--jinja（默认开）、--ui WebUI 开关（默认开，代理透传后自带 WebUI 同端口可访问） |
 | 硬件 | --n-gpu-layers（默认 auto）、--threads、--threads-batch、--split-mode、--device、--mmap（默认开）、--mlock、--fit（默认开）、--cache-type-k / --cache-type-v（默认 f16）、--n-cpu-moe |
 | 上下文 | --ctx-size（留空=模型默认）、--parallel、--batch-size（默认 2048）、--ubatch-size（默认 512）、--cache-ram（MiB）、--flash-attn（默认 auto）、--swa-full |
 | 采样 | --temperature（0.80）、--top-k（40）、--top-p（0.95）、--min-p（0.05）、--repeat-penalty（1.00）、--presence-penalty、--frequency-penalty、--repeat-last-n（64）、--seed（-1）、--ignore-eos |
@@ -128,7 +128,7 @@ App 不自行维护默认值，避免版本漂移。每个参数带 tooltip（--
 ### 5.3 强制参数（用户不可改，App 组装时追加）
 - --log-colors on（管道下 auto 会关颜色，必须显式 on 才能拿到 ANSI）
 - --metrics（启用 /metrics 端点备用）
-- --host 127.0.0.1 --port <内部端口>（server 自身监听；用户填的端口是代理端口）
+- --host 127.0.0.1 --port <内部端口>（server 自身永远只绑 127.0.0.1 内部端口；表单里的可见端口与 --host 均作用于代理层，不传给 server）
 
 ## 6. 日志（彩色）
 
@@ -172,7 +172,7 @@ App 不自行维护默认值，避免版本漂移。每个参数带 tooltip（--
 
 ### 8.2 读取侧（核心：绝不整文件加载）
 - JSONL 每行一条，支持从尾部读：
-  - 首屏只读文件末尾 ~2MB chunk，按行切分解析出最后若干条 → 最新一页；
+  - 首屏只读文件末尾 ~2MB chunk，按行切分解析出最后若干条 → 最新一页；若末尾行不完整（单条记录超过 2MB），继续向前扩展读取直到该行完整；
   - 每页 50 条，「加载更多」再往前读下一个 2MB chunk，O(页大小) 而非 O(文件大小)；
   - 500MB 与 5MB 文件首屏耗时一致。
 - 列表行只渲染摘要（时间 + prompt 前 80 字 + token 数）；完整内容展开时才显示（数据已在页内，展开零 IO）。
