@@ -111,11 +111,12 @@ llama.cpp 版本（`<appRoot>/llama.cpp/<tag>/llama-server.exe`，当前已下�
 
 | 分组 | 参数 |
 |---|---|
-| 模型 | 模型文件（扫描/手动）、--alias、--mmproj（可选，带浏览按钮） |
+| 模型 | 模型文件（扫描/手动）、--alias、--mmproj（多模态投影文件，可选，带浏览按钮）、--mmproj-url（投影文件 URL，可选）、--mmproj-auto（默认开，配合 -hf 自动用投影）、--mmproj-offload（默认开，投影 GPU 卸载）、--image-min-tokens / --image-max-tokens（动态分辨率图像 token 上下限，留空=读模型） |
 | 服务 | 可见端口（默认 8080）、--host（**代理**监听地址，默认 127.0.0.1，填 0.0.0.0 允许局域网访问；server 自身永远绑 127.0.0.1，见 §5.3）、--api-key、--timeout（默认 600）、--jinja（默认开）、--ui WebUI 开关（默认开，代理透传后自带 WebUI 同端口可访问）、--sse-ping-interval（默认 30，SSE 心跳，-1 关）、CORS 四件套：--cors-origins / --cors-methods / --cors-headers / --cors-credentials（局域网多客户端场景用） |
 | 硬件 | --n-gpu-layers（默认 auto）、--threads、--threads-batch、--split-mode、--device、--load-mode（默认 auto；**替代已废弃的 --mmap/--mlock/--direct-io**，取值 auto/none/mmap/mlock/direct_io 等）、--fit（默认开）、--cache-type-k / --cache-type-v（默认 f16）、--n-cpu-moe |
 | 上下文 | --ctx-size（留空=模型默认）、--parallel、--batch-size（默认 2048）、--ubatch-size（默认 512）、--cache-ram（MiB）、--flash-attn（默认 auto）、--swa-full |
 | 采样 | --temperature（0.80）、--top-k（40）、--top-p（0.95）、--min-p（0.05）、--repeat-penalty（1.00）、--presence-penalty、--frequency-penalty、--repeat-last-n（64）、--seed（-1）、--ignore-eos、--reasoning-effort（default/minimal/low/medium/high/xhigh/max）、--reasoning-preserve（开关，推理模型保留完整思考链） |
+| 投机解码 (MTP) | --spec-type（多选：none / draft-simple / draft-eagle3 / **draft-mtp** / draft-dflash / draft-dspark / ngram-simple / ngram-map-k / ngram-map-k4v / ngram-mod / ngram-cache；MTP 选 draft-mtp）、--spec-draft-model（MTP/draft 模型文件，带浏览按钮）、--spec-draft-hf（HF 上的 draft 模型 `<user>/<model>[:quant]`）、--spec-draft-n-max（默认 3）、--spec-draft-n-min（默认 0）、--spec-draft-ngl（默认 auto）、--spec-draft-threads（默认同 --threads）、--spec-draft-p-split（默认 0.10）、--spec-draft-p-min（默认 0.00）、--spec-default（开关，启用默认投机解码配置） |
 | 高级 | --verbosity（默认 3）、--warmup（默认开）、--context-shift、--cache-reuse、--perf、--log-prompts-dir（llama.cpp 自带 prompt 落盘调试）、--mcp-servers-config（MCP 服务器定义 JSON 路径）、--mtmd-batch-max-tokens（默认 1024，多模态图像 token 批大小）、--spec-draft-backend-sampling（开关）、**附加参数自由文本框**（shell 风格分词后追加，覆盖一切未表单化的参数） |
 
 ### 5.1 每模型参数档案
