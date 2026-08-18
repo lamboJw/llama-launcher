@@ -1,0 +1,15 @@
+# llama.cpp binaries (auto-downloaded at runtime, not source)
+llama.cpp/
+
+# tool metadata
+.codegraph/
+
+# node / build output
+node_modules/
+dist/
+out/
+release/
+*.log
+
+# local config
+*.local
