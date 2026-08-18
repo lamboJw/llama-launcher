@@ -1,0 +1,9 @@
+appId: com.lambojw.llamalauncher
+productName: llama-launcher
+directories:
+  output: release
+files:
+  - dist/**
+  - package.json
+win:
+  target: dir
