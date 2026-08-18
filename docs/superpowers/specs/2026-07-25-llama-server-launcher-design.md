@@ -99,6 +99,10 @@ llama.cpp 版本（`<appRoot>/llama.cpp/<tag>/llama-server.exe`，当前已下�
 - 路径输入框 + 「浏览…」原生目录对话框；记住上次目录。
 - 递归扫描目录下所有 .gguf：文件名、完整路径、大小（GB）、修改时间；按修改时间倒序。
 - 点击列表项选中，作为 --model；顶栏显示选中模型名。
+- **mmproj 自动探测**：选中模型后，扫描该模型**同目录**下匹配 `mmproj.*.gguf`（不区分大小写）的文件：
+  - 恰好 1 个 → 自动填入 `--mmproj` 字段（用户仍可手动改/清空）；
+  - 多个 → 不自动填，在 `--mmproj` 旁给出候选下拉供选择；
+  - 0 个 → 留空，由用户用浏览按钮手动选（或走 `--mmproj-url` / `--mmproj-auto`）。
 - 「重新扫描」按钮手动刷新；纯文件枚举，不轮询。
 - 兜底：「手动输入模型路径」输入框（模型在别处或想用 --hf-repo 等）。
 - 扫描结果不持久化（每次启动按目录重扫）；只持久化「目录 + 上次选中路径」。
@@ -111,7 +115,7 @@ llama.cpp 版本（`<appRoot>/llama.cpp/<tag>/llama-server.exe`，当前已下�
 
 | 分组 | 参数 |
 |---|---|
-| 模型 | 模型文件（扫描/手动）、--alias、--mmproj（多模态投影文件，可选，带浏览按钮）、--mmproj-url（投影文件 URL，可选）、--mmproj-auto（默认开，配合 -hf 自动用投影）、--mmproj-offload（默认开，投影 GPU 卸载）、--image-min-tokens / --image-max-tokens（动态分辨率图像 token 上下限，留空=读模型） |
+| 模型 | 模型文件（扫描/手动）、--alias、--mmproj（多模态投影文件，**选中模型时自动探测同目录 `mmproj.*.gguf` 填入**，见 §4；可手动改/清空，带浏览按钮）、--mmproj-url（投影文件 URL，可选）、--mmproj-auto（默认开，配合 -hf 自动用投影）、--mmproj-offload（默认开，投影 GPU 卸载）、--image-min-tokens / --image-max-tokens（动态分辨率图像 token 上下限，留空=读模型） |
 | 服务 | 可见端口（默认 8080）、--host（**代理**监听地址，默认 127.0.0.1，填 0.0.0.0 允许局域网访问；server 自身永远绑 127.0.0.1，见 §5.3）、--api-key、--timeout（默认 600）、--jinja（默认开）、--ui WebUI 开关（默认开，代理透传后自带 WebUI 同端口可访问）、--sse-ping-interval（默认 30，SSE 心跳，-1 关）、CORS 四件套：--cors-origins / --cors-methods / --cors-headers / --cors-credentials（局域网多客户端场景用） |
 | 硬件 | --n-gpu-layers（默认 auto）、--threads、--threads-batch、--split-mode、--device、--load-mode（默认 auto；**替代已废弃的 --mmap/--mlock/--direct-io**，取值 auto/none/mmap/mlock/direct_io 等）、--fit（默认开）、--cache-type-k / --cache-type-v（默认 f16）、--n-cpu-moe |
 | 上下文 | --ctx-size（留空=模型默认）、--parallel、--batch-size（默认 2048）、--ubatch-size（默认 512）、--cache-ram（MiB）、--flash-attn（默认 auto）、--swa-full |
