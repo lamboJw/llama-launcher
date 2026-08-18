@@ -21,7 +21,9 @@ llama.cpp 版本（`<appRoot>/llama.cpp/<tag>/llama-server.exe`，当前已下�
 6. 内置测试聊天（走同一代理端口，同样被记录）；
 7. 每个模型一份参数档案，下次选中该模型时自动应用；
 8. llama.cpp 版本更新：启动时检查 GitHub 最新版，下载 Windows x64 (CUDA 13) 主包与对应 CUDA DLLs，
-   更新到 App 目录 llama.cpp/ 下，最多保留两个版本，界面可选。
+   更新到 App 目录 llama.cpp/ 下，最多保留两个版本，界面可选；
+9. **多模型路由**（llama-server 内置 router 模式）：同时兼容 HF cache 模型与本地路径模型，
+   按 API 请求的 `model` 字段自动切换模型，本地（本地目录 ∪ HF cache）没有则拒绝请求（400）。
 
 ## 2. 总体架构
 
@@ -55,13 +57,27 @@ llama.cpp 版本（`<appRoot>/llama.cpp/<tag>/llama-server.exe`，当前已下�
 
 ### 2.2 启动流程
 1. 用户点「启动」→ 主进程组装参数（见 §5.3 强制参数）。
-2. spawn llama-server.exe（子进程，stdout/stderr 管道）。
+   - **单模型模式**：传 `--model <path>`（或 `--hf-repo`）。
+   - **多模型路由模式**：**不传** `--model`/`--hf-repo`（llama-server 据此自动进 router 模式，
+     `is_router_server = model.path.empty() && model.hf_repo.empty()`），改传 `--models-dir` 等（见 §5.4）；
+     router 自身不占 GPU，按需派生子进程（每模型一个）加载模型。
+2. spawn llama-server.exe（子进程，stdout/stderr 管道；路由模式额外用 Job Object 绑定进程树，见 §2.3）。
 3. 启动反向代理监听可见端口；就绪判定 = 轮询内部端口 /health 返回 200。
 4. 状态置「运行中」，顶栏显示端口。
 
 ### 2.3 停止与崩溃
-- 点「停止」/ 关窗口 / 进程崩溃：结束子进程（Windows 用 taskkill /T /F 杀进程树），关闭代理。
+- 点「停止」/ 关窗口 / 进程崩溃：结束子进程树，关闭代理。
+  - **单模型模式**：直接结束 llama-server 进程（Windows `taskkill /T /F` 兜底）。
+  - **多模型路由模式（关键）**：router 会派生**子进程**（每模型一个），硬杀 router 会**孤儿化**子进程
+    （占着 GPU 显存不释放）。因此：
+    1. spawn 时用 **Job Object**（`CreateJobObject` + `AssignProcessToJobObject` +
+       `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`）把 router 及其全部子进程绑成一个进程树——
+       App 退出/崩溃/关 Job 句柄时整树自动被杀，杜绝孤儿；
+    2. 「停止」先向 router 进程组发 **`CTRL_C_EVENT`**（`GenerateConsoleCtrlEvent`）触发其优雅关停
+       （router 内部 `unload_all()` 逐个 terminate 子进程、释放显存），需 `CREATE_NEW_PROCESS_GROUP`；
+    3. 等待 N 秒（可配，默认 ~10s）后仍未退出 → Job Object 兜底强杀整树。
 - 子进程意外退出：状态栏红色「已崩溃 (exit N)」，日志保留最后输出，提供「重启」按钮。
+  - 路由模式下 router 自身崩溃 → Job Object 一并清理其子进程。
 - 可见端口被占用：启动前检测，失败则弹错并提示改端口。
 - 代理在 server 未就绪时返回 503。
 
@@ -80,6 +96,7 @@ llama.cpp 版本（`<appRoot>/llama.cpp/<tag>/llama-server.exe`，当前已下�
 │ │  · qwen3-8b-q4.gguf 4.2G│ │ │                                  │ │
 │ │  · llama3.1-8b-q8.gguf 8.1G│ │ │   （当前标签内容区）            │ │
 │ ├───────────────────────┤ │ │                                  │ │
+│ │ [运行模式: 单模型 ▾]     │ │ │                                  │ │
 │ │ [💾 保存当前参数到档案]  │ │ │                                  │ │
 │ │ 参数分组 (折叠面板)      │ │ │                                  │ │
 │ │ ▾ 模型    ▸ 服务       │ │ │                                  │ │
@@ -89,6 +106,9 @@ llama.cpp 版本（`<appRoot>/llama.cpp/<tag>/llama-server.exe`，当前已下�
 └───────────────────────────┴──────────────────────────────────────┘
 ```
 
+- **运行模式**（左栏顶部下拉）：单模型（默认）/ 多模型路由。切到路由模式 → 模型扫描区改为
+  「本地目录 + HF cache 目录」双来源并集列表（见 §4.1），参数表单隐藏 `--model` 选择、
+  显示路由字段（见 §5.4）。
 - **日志标签**：ANSI 彩色渲染、自动滚动（上滚暂停、回到底部恢复）、关键字过滤、清空按钮。
 - **统计标签**：5 张指标卡（最近一轮值）+ 最近 20 轮明细表。
 - **聊天标签**：内置测试聊天，流式显示，请求走可见端口（因此也被记录）。
@@ -107,11 +127,34 @@ llama.cpp 版本（`<appRoot>/llama.cpp/<tag>/llama-server.exe`，当前已下�
 - 兜底：「手动输入模型路径」输入框（模型在别处或想用 --hf-repo 等）。
 - 扫描结果不持久化（每次启动按目录重扫）；只持久化「目录 + 上次选中路径」。
 
+### 4.1 多模型路由模式：模型列表（本地 + HF cache 并集）
+
+路由模式下，模型扫描区改为展示**两个来源的并集**，让用户知道 API 请求 `model` 字段能填什么：
+
+- **本地模型**（来自 `--models-dir` 目录，badge「本地」）：
+  - 命名规则（与 llama-server router 一致）：子目录 → **目录名**（`<dir>/<name>/*.gguf` → `<name>`，
+    分片取 `-00001-of-` 首片）；散文件 → **去 `.gguf` 的文件名**。
+  - 同目录 companion 自动识别（与 router 一致）：`mmproj*.gguf` → 自动挂 `--mmproj`；
+    `mtp-`/`dspark-`/`dflash-` 前缀文件 → 自动挂 `--spec-draft-model`。列表里以图标标注。
+- **HF cache 模型**（来自 HF cache 目录，badge「HF cache」）：
+  - 扫描 HF cache 目录（默认 `%USERPROFILE%\.cache\huggingface\hub`，可配置，见 §5.4）下的
+    `models--<user>--<name>` 仓库目录，反解出 HF repo 名（`<user>/<name>`）作为 `model` 字段值；
+    读取 `refs/` 确认有已下载 snapshot 才列出（未下载完的不列）。
+  - router 对这类模型用 `LLAMA_ARG_HF_REPO=<name>` 离线加载（不联网下载）。
+- **同名冲突**：本地与 HF cache 同名 → 本地优先（与 router 行为一致），列表合并为一条、badge 标「本地」。
+- 列表项显示：`model` 字段名（可复制）、来源 badge、路径/大小；点击仅用于「查看/复制 model 名」，
+  路由模式**不**像单模型那样「选中即启动」——启动的是 router，模型由请求按需加载。
+
 ## 5. 参数表单
 
 按 llama-server **b10488**（build 10488，commit 9d77fa172，表单基线版本）实际 --help 参数分组。
 **留空 = 不传该参数**（用 llama-server 默认值），App 不自行维护默认值，避免版本漂移。
 每个参数带 tooltip（--help 原文说明 + 默认值）。
+
+**运行模式**（表单顶部下拉，二选一）：
+- **单模型**（默认）：下方「模型」组的模型文件选择生效，启动时传 `--model <path>`。
+- **多模型路由**：不传 `--model`，改用 §5.4 的路由字段（`--models-dir` + HF cache + 上限/自动加载）；
+  「模型」组的模型文件选择与 mmproj 自动探测**隐藏/禁用**（companion 由 router 自动识别）。
 
 | 分组 | 参数 |
 |---|---|
@@ -138,6 +181,28 @@ llama.cpp 版本（`<appRoot>/llama.cpp/<tag>/llama-server.exe`，当前已下�
 - --log-colors on（管道下 auto 会关颜色，必须显式 on 才能拿到 ANSI）
 - --metrics（启用 /metrics 端点备用）
 - --host 127.0.0.1 --port <内部端口>（server 自身永远只绑 127.0.0.1 内部端口；表单里的可见端口与 --host 均作用于代理层，不传给 server）
+- **模式相关**：单模型模式追加 `--model <path>`；**多模型路由模式不传 `--model`/`--hf-repo`**
+  （llama-server 据此自动进 router 模式），改传 §5.4 的路由参数。
+
+### 5.4 多模型路由模式字段
+
+仅「运行模式 = 多模型路由」时显示。利用 llama-server 内置 router（不传 `--model` 即自动启用）：
+
+| 字段 | 说明 |
+|---|---|
+| --models-dir（本地模型目录，浏览按钮） | 本地路径模型来源；子目录名/去 .gguf 文件名 = `model` 字段值；自动识别同目录 mmproj/draft companion |
+| HF cache 目录（默认 `%USERPROFILE%\.cache\huggingface\hub`，浏览按钮） | HF cache 模型来源；App 据此扫描模型列表（§4.1），并注入 `HF_HUB_CACHE` 环境变量给 server 子进程，使 router 从该目录离线加载 |
+| --models-max（默认 4，0=不限） | 同时加载的模型上限，超出按 LRU 淘汰 |
+| --models-autoload（默认开，开关） | 请求命中未加载模型时自动加载；关则需先手动加载 |
+| --models-preset（可选，INI 路径，浏览按钮） | 自定义路径模型 preset（既不在 models-dir 也不在 HF cache 的模型） |
+
+**行为（router 自带，App 不重造）**：
+- 请求 `model` 命中 本地∪HF cache∪preset → 未加载则自动加载（autoload），已加载则复用；
+- 命中不了 → **400 `model '<name>' not found`**（即「本地没有就拒绝」）；
+- 并发超过 `--models-max` → LRU 淘汰最久未用模型。
+
+**代理层配合**：App 反向代理对路由模式**原样透传**（不解析/不改写 `model` 字段），
+TTFT/缓存命中率/轮次记录逻辑与单模型一致（按请求计，模型名记入记录）。
 
 ## 6. 日志（彩色）
 
@@ -281,6 +346,9 @@ llama.cpp 版本（`<appRoot>/llama.cpp/<tag>/llama-server.exe`，当前已下�
 - 代理 server 未就绪 → 503。
 - 记录文件损坏行 → 跳过。
 - 档案文件损坏 → 忽略该档案，按无档案处理。
+- **路由模式**：请求 `model` 不在 本地∪HF cache∪preset → 由 router 返回 400 `model '<name>' not found`，
+  App 代理原样透传（聊天面板显示该错误）；`--models-dir` 目录不存在 → 启动前校验并弹错；
+  HF cache 目录不存在/为空 → 模型列表仅显示本地来源，不报错。
 
 ## 11. 测试
 
@@ -291,8 +359,13 @@ llama.cpp 版本（`<appRoot>/llama.cpp/<tag>/llama-server.exe`，当前已下�
   - 档案：按模型路径哈希存取、损坏档案忽略；
   - 版本模块：双格式版本字符串解析（`9222 (abc)` / `0.1.2-dev (build 10488, commit ...)`）、
     资产名匹配（win-cuda-13.*-x64 优先、回退最高 CUDA 版本）、`invalid argument` 诊断映射；
-  - 下载器：断点续传（Range 头）、磁盘预检、版本修剪（保留 2 个、跳过当前选中）。
+  - 下载器：断点续传（Range 头）、磁盘预检、版本修剪（保留 2 个、跳过当前选中）；
+  - 路由模式：本地模型命名规则（子目录名 / 去 .gguf 文件名 / 分片首片）、HF cache 目录扫描
+    （`models--user--name` 反解 repo 名、仅列有 snapshot 的）、本地∪HF cache 并集 + 同名本地优先、
+    companion（mmproj/draft）识别。
 - 集成冒烟：起真实 llama-server（小模型），启动/停止/崩溃恢复、彩色日志、统计值与 /metrics 对照。
+- 路由模式集成冒烟：router 启动（不传 --model）、请求命中本地/HF cache 模型自动加载、
+  未命中模型返回 400、停止时 Job Object 清理子进程树（无孤儿、显存释放）。
 
 ## 12. 项目结构（Electron）
 
@@ -301,13 +374,14 @@ llama-launcher/
 ├─ src/
 │  ├─ main/
 │  │  ├─ index.ts          # 入口、窗口、IPC 注册
-│  │  ├─ process-manager.ts# spawn/停止/崩溃/就绪判定
+│  │  ├─ process-manager.ts# spawn/停止/崩溃/就绪判定（路由模式：Job Object 进程树 + CTRL_C_EVENT 优雅停）
 │  │  ├─ proxy.ts          # 反向代理 + TTFT + 缓存命中率 + 轮次累积
 │  │  ├─ log-parser.ts     # 行切分 + 时序行正则
 │  │  ├─ records.ts        # JSONL 写入/滚动/分页尾部读取/总量淘汰
 │  │  ├─ profiles.ts       # 每模型档案存取
 │  │  ├─ config.ts         # electron-store 封装
-│  │  ├─ scan.ts           # .gguf 递归扫描
+│  │  ├─ scan.ts           # .gguf 递归扫描（单模型 + 路由模式本地目录命名规则）
+│  │  ├─ hf-cache.ts       # HF cache 目录扫描（models--* 反解 repo 名、refs/snapshot 判定）
 │  │  ├─ version.ts        # --version 探测（双格式解析）、基线对比
 │  │  └─ updater.ts        # GitHub 检查/资产匹配/断点续传下载/解压/修剪/manifest
 │  ├─ preload/
