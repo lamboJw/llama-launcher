@@ -127,11 +127,30 @@ llama.cpp 版本（`<appRoot>/llama.cpp/<tag>/llama-server.exe`，当前已下�
   - 命名规则：子目录 → **目录名**（`<dir>/<name>/*.gguf` → `<name>`，分片取 `-00001-of-` 首片）；
     散文件 → **去 `.gguf` 的文件名**。
   - 同目录 `mmproj*.gguf` 自动挂 `--mmproj`（与 §4 自动探测一致）。列表里以图标标注。
-- **HF cache 模型**（来自 HF cache 目录，badge「HF cache」）：
-  - 扫描 HF cache 目录（默认 `%USERPROFILE%\.cache\huggingface\hub`，可配置，见 §5.4）下的
-    `models--<user>--<name>` 仓库目录，反解出 HF repo 名（`<user>/<name>`）作为 `model` 字段值；
-    读取 `refs/` 确认有已下载 snapshot 才列出（未下载完的不列）。
-  - App 切换到这类模型时用 `--hf-repo <name> --offline` 启动（offline 强制走 cache、不联网）。
+- **HF cache 模型**（来自 HF cache 目录，badge「HF cache」）。扫描算法与 llama.cpp b10488
+  `get_cached_files`（hf-cache.cpp）**完全一致**（已逐行核对源码），保证列表里每个名字 `--hf-repo` 都认得出：
+  1. 枚举 cache 目录（默认 `%USERPROFILE%\.cache\huggingface\hub`，可配置，见 §5.4）顶层目录，
+     仅保留**以 `models--` 开头且含 `snapshots/` 子目录**的（天然排除 `datasets--*`/`spaces--*`）；
+  2. **反解 repo 名**：去掉 `models--` 前缀，再**把所有 `--` 替换为 `/`** → `<user>/<name>`
+     （即 `model` 字段值，`--hf-repo` 接受的格式）。
+     - 替换为何无歧义：llama.cpp `is_valid_repo_id` 要求特殊字符 `[/.-]` 必须被基础字符包围
+       （不允许连续特殊字符），合法 repo 名不可能含 `--`，目录名里每个 `--` 必是分隔符；
+     - 校验同 `is_valid_repo_id`：非空、≤256 字符、恰好一个 `/`、字符集 `[A-Za-z0-9_.-]` 且满足包围约束，不通过则跳过；
+  3. **确认已下载**（同 `get_cached_ref`）：读 `refs/` 下每个常规文件首行，commit 须为 **40 位十六进制**，
+     **`refs/main` 优先**、否则取第一个有效的；`snapshots/<commit>/` 须存在，且（App 加严）
+     内含至少一个 `*.gguf`（大小写不敏感）——否则不列（排除未下载完 / 无 gguf 的仓库）；
+  4. **量化后缀**：`--hf-repo <user>/<name>[:quant]`（b10488：quant 可选、大小写不敏感，
+     缺省 Q4_K_M，没有则回退仓库第一个文件）。列表每仓库一条；snapshot 含多个 gguf 时
+     列出可用量化。请求 `model` 字段支持 `user/name` 与 `user/name:Q4_K_M` 两种写法
+     （App 去掉 `:QUANT` 后做列表匹配，完整名传给 `--hf-repo`）；
+  5. **大小写**：请求 `model` 字段按**大小写不敏感**匹配（HF repo 名大小写不敏感），
+     但启动时传目录名反解出的**原始大小写**（防大小写敏感文件系统问题）。
+  - 示例：`hub\models--ggml-org--GLM-4.7-Flash-GGUF\`（`refs/main` 有效、snapshot 含
+    `GLM-4.7-Flash-Q4_K_M.gguf` + `mmproj-BF16.gguf`）→ 列表项 `ggml-org/GLM-4.7-Flash-GGUF`
+    （badge「HF cache」、量化 Q4_K_M、mmproj 图标）。
+  - App 切换到这类模型时用 `--hf-repo <name>[:quant] --offline` 启动（offline 强制走 cache、不联网）
+    + 注入 `HF_HUB_CACHE` 环境变量；mmproj 由 `--hf-repo` 自动从 cache 取（配合 §5 `--mmproj-auto` 默认开），
+    无需手填 `--mmproj`。
 - **同名冲突**：本地与 HF cache 同名 → 本地优先，列表合并为一条、badge 标「本地」。
 - 列表项显示：`model` 字段名（可复制）、来源 badge、路径/大小。自动切换模式下列表项**不**是
   「点击即启动」（初始模型仍在「模型」组选择），用于查看/复制 model 名。
