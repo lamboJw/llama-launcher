@@ -5813,3 +5813,287 @@ export {};
 ```bash
 git add -A && git commit -m "renderer: layout + settings form + colored log tab (spec §3)"
 ```
+
+---
+
+### Task 16: renderer — 统计 tab + 聊天 tab（规格 §7/§3）+ 轮次统计入库
+
+**Files:**
+- Modify: `src/main/index.ts`（onLog：轮次完成 → StatsStore + `stats:round` 事件）
+- Modify: `src/renderer/index.html`（统计 5 卡片 + 20 行表格；聊天气泡区 + 输入框）
+- Modify: `src/renderer/styles.css`（卡片/表格/聊天气泡样式）
+- Modify: `src/renderer/main.ts`（renderStats + chatSend SSE 客户端 + 事件接线）
+
+统计（规格 §7）：5 卡片 = 首 token 时间 / prefill 速度 / decode 速度 / prefill 时间 / 缓存命中率（最新一轮，`stats.getLatest()` 合并逻辑：proxy usage 轮次与日志解析轮次按 ts 配对）+ 最近 20 行历史表格。事件：`stats:request`（proxy 每请求，含 usage TTFT/命中率）与 `stats:round`（日志解析轮次完成：prompt eval + eval-time 配对后）都推送 `{latest, history}`。index.ts 原先只喂 RoundTracker 未入库 StatsStore → 本任务补上（否则 prefill/decode 卡片永远为 -）。
+
+聊天（规格 §3）：内置测试聊天走可见端口 `http://<proxyHost>:<visiblePort>/v1/chat/completions`（SSE 流式），model = 当前下拉选择，apiKey 非空时带 `Authorization: Bearer`；renderer 直接 fetch（proxy CORS 默认 `*`，file:// 源 Origin: null 兼容）；Ctrl+Enter 发送；请求失败回滚用户消息。
+
+提交：`1bf93e2`（4 files, +164/-4），typecheck 干净，123/123 测试通过。
+
+- [ ] **Step 1-4: 实现（见提交 diff）**
+
+```diff
+diff --git a/src/main/index.ts b/src/main/index.ts
+index 50158c8..f173452 100644
+--- a/src/main/index.ts
++++ b/src/main/index.ts
+@@ -38,7 +38,15 @@ const ctl = new ServerController(pm, {
+     if (ev) {
+       const ts = Date.now();
+       if (ev.kind === 'prompt') rounds.onPrompt(ev, ts);
+-      else rounds.onEval(ev, ts);
++      else {
++        rounds.onEval(ev, ts);
++        // 轮次完成（prefill + decode 配对）→ 入库并推送（规格 §7）
++        const r = rounds.rounds[rounds.rounds.length - 1];
++        if (r && r.prefillMs !== null) {
++          stats.addRound(r);
++          send('stats:round', { latest: stats.getLatest(), history: stats.getHistory().slice(-20) });
++        }
++      }
+     }
+   },
+   onExit: (info) => send('exit:crash', info),
+diff --git a/src/renderer/index.html b/src/renderer/index.html
+index 7d312a3..36cc4ae 100644
+--- a/src/renderer/index.html
++++ b/src/renderer/index.html
+@@ -52,10 +52,29 @@
+         <div id="log-view"></div>
+       </div>
+       <div id="tab-stats" class="tab hidden">
+-        <div class="placeholder">统计面板（Task 16）</div>
++        <div id="stat-cards">
++          <div class="card"><div class="card-label">首 token 时间</div><div class="card-value" id="st-ttft">-</div></div>
++          <div class="card"><div class="card-label">prefill 速度</div><div class="card-value" id="st-ptps">-</div></div>
++          <div class="card"><div class="card-label">decode 速度</div><div class="card-value" id="st-dtps">-</div></div>
++          <div class="card"><div class="card-label">prefill 时间</div><div class="card-value" id="st-pms">-</div></div>
++          <div class="card"><div class="card-label">缓存命中率</div><div class="card-value" id="st-cache">-</div></div>
++        </div>
++        <div class="table-wrap">
++          <table id="stat-table">
++            <thead><tr><th>时间</th><th>模型</th><th>TTFT</th><th>prefill</th><th>prefill 速度</th><th>decode 速度</th><th>缓存命中率</th></tr></thead>
++            <tbody id="stat-tbody"></tbody>
++          </table>
++        </div>
+       </div>
+       <div id="tab-chat" class="tab hidden">
+-        <div class="placeholder">内置测试聊天（Task 16）</div>
++        <div id="chat-msgs"><div class="chat-bubble sys">服务器运行中时，消息发送到可见端口的 /v1/chat/completions（SSE 流式）</div></div>
++        <div id="chat-input">
++          <textarea id="chat-text" rows="2" placeholder="发送消息…（Ctrl+Enter 发送）"></textarea>
++          <div class="row">
++            <button id="chat-send">发送</button>
++            <button id="chat-clear" class="stop">清空</button>
++          </div>
++        </div>
+       </div>
+       <div id="tab-records" class="tab hidden">
+         <div class="placeholder">轮次记录（Task 17）</div>
+diff --git a/src/renderer/main.ts b/src/renderer/main.ts
+index 17e96ff..78df373 100644
+--- a/src/renderer/main.ts
++++ b/src/renderer/main.ts
+@@ -1,6 +1,6 @@
+ // renderer/main.ts — 主 UI（规格 §3：顶栏 / 左栏设置 / 右栏 tabs）；Task 16-17 填充统计/聊天/轮次记录
+ import { ansiHtml } from './ansi.js';
+-import type { FormValues, ModelRef, ServerState, Profile, UpdateProgress, InstalledVersion } from '../shared/types.js';
++import type { FormValues, ModelRef, ServerState, Profile, RoundStats, UpdateProgress, InstalledVersion } from '../shared/types.js';
+ 
+ interface BootState {
+   appRoot: string;
+@@ -9,6 +9,7 @@ interface BootState {
+   union: ModelRef[];
+   installed: InstalledVersion[];
+   banner: { version: string | null; update: string | null };
++  stats: { latest: RoundStats | null; history: RoundStats[] };
+ }
+ 
+ interface ExitInfo { code: number | null; early: boolean; stderr: string; intentional: boolean }
+@@ -125,6 +126,7 @@ let form: FormValues | null = null;
+ let union: ModelRef[] = [];
+ let installed: InstalledVersion[] = [];
+ let latestTag: string | null = null;
++let serverState: ServerState = { status: 'stopped', port: null, model: null, exitCode: null };
+ let saveTimer: ReturnType<typeof setTimeout> | null = null;
+ 
+ const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
+@@ -352,6 +354,7 @@ const STATUS_UI: Record<ServerState['status'], [string, string]> = {
+ };
+ 
+ function renderState(s: ServerState): void {
++  serverState = s;
+   const [text, color] = STATUS_UI[s.status];
+   const badge = $<HTMLSpanElement>('status-badge');
+   badge.textContent = s.status === 'crashed' && s.exitCode !== null ? `${text} (exit ${s.exitCode})` : text;
+@@ -432,11 +435,117 @@ async function doCheckUpdate(): Promise<void> {
+   }
+ }
+ 
++// ---------- 统计（规格 §7：5 卡片 + 最近 20 行） ----------
++const fmtMs = (v: number | null): string => (v === null ? '-' : v < 1000 ? `${v.toFixed(0)} ms` : `${(v / 1000).toFixed(2)} s`);
++const fmtTps = (v: number | null): string => (v === null ? '-' : `${v.toFixed(1)} tok/s`);
++const fmtPct = (v: number | null): string => (v === null ? '-' : `${(v * 100).toFixed(1)} %`);
++
++function renderStats(latest: RoundStats | null, history: RoundStats[]): void {
++  const set = (id: string, v: string): void => { const el = document.getElementById(id); if (el) el.textContent = v; };
++  set('st-ttft', fmtMs(latest?.ttftMs ?? null));
++  set('st-ptps', fmtTps(latest?.prefillTps ?? null));
++  set('st-dtps', fmtTps(latest?.decodeTps ?? null));
++  set('st-pms', fmtMs(latest?.prefillMs ?? null));
++  set('st-cache', fmtPct(latest?.cacheHitRate ?? null));
++  const tbody = document.getElementById('stat-tbody');
++  if (!tbody) return;
++  tbody.textContent = '';
++  for (const r of [...history].slice(-20).reverse()) {
++    const tr = document.createElement('tr');
++    const cells = [
++      new Date(r.ts).toLocaleTimeString(),
++      r.model ?? '',
++      fmtMs(r.ttftMs),
++      fmtMs(r.prefillMs),
++      fmtTps(r.prefillTps),
++      fmtTps(r.decodeTps),
++      fmtPct(r.cacheHitRate),
++    ];
++    for (const c of cells) { const td = document.createElement('td'); td.textContent = c; tr.appendChild(td); }
++    tbody.appendChild(tr);
++  }
++}
++
++// ---------- 聊天（走可见端口代理，规格 §3） ----------
++const chatHistory: { role: 'user' | 'assistant'; content: string }[] = [];
++
++function chatBubble(role: 'user' | 'assistant' | 'sys', text: string): HTMLElement {
++  const d = document.createElement('div');
++  d.className = `chat-bubble ${role}`;
++  d.textContent = text;
++  const host = $<HTMLDivElement>('chat-msgs');
++  host.appendChild(d);
++  host.scrollTop = host.scrollHeight;
++  return d;
++}
++
++async function chatSend(): Promise<void> {
++  const ta = $<HTMLTextAreaElement>('chat-text');
++  const text = ta.value.trim();
++  if (text === '') return;
++  if (!form) return;
++  if (serverState.status !== 'running') { chatBubble('sys', '服务器未运行（先点启动）'); return; }
++  ta.value = '';
++  chatHistory.push({ role: 'user', content: text });
++  chatBubble('user', text);
++  const bubble = chatBubble('assistant', '…');
++  try {
++    const headers: Record<string, string> = { 'content-type': 'application/json' };
++    if (form.apiKey !== '') headers['authorization'] = `Bearer ${form.apiKey}`;
++    const resp = await fetch(`http://${form.proxyHost}:${form.visiblePort}/v1/chat/completions`, {
++      method: 'POST',
++      headers,
++      body: JSON.stringify({ model: modelSelect.value, messages: chatHistory, stream: true }),
++    });
++    if (!resp.ok || !resp.body) {
++      bubble.textContent = `请求失败（HTTP ${resp.status}）：${await resp.text()}`;
++      chatHistory.pop();
++      return;
++    }
++    let acc = '';
++    const reader = resp.body.getReader();
++    const dec = new TextDecoder();
++    let buf = '';
++    for (;;) {
++      const { done, value } = await reader.read();
++      if (done) break;
++      buf += dec.decode(value, { stream: true });
++      let idx: number;
++      while ((idx = buf.indexOf('\n\n')) !== -1) {
++        const raw = buf.slice(0, idx);
++        buf = buf.slice(idx + 2);
++        const dataLine = raw.split('\n').find((l) => l.startsWith('data:'));
++        if (!dataLine) continue;
++        const data = dataLine.slice(5).replace(/^ /, '');
++        if (data === '[DONE]') continue;
++        try {
++          const obj = JSON.parse(data) as { choices?: { delta?: { content?: unknown } }[] };
++          const c = obj.choices?.[0]?.delta?.content;
++          if (typeof c === 'string') { acc += c; bubble.textContent = acc; };
++        } catch { /* 非 JSON 块跳过 */ }
++      }
++    }
++    if (acc === '') bubble.textContent = '（空响应）';
++    chatHistory.push({ role: 'assistant', content: acc });
++  } catch (e) {
++    bubble.textContent = `网络错误: ${String(e)}`;
++    chatHistory.pop();
++  }
++}
++
+ // ---------- 事件订阅 ----------
+ function subscribeEvents(): void {
+   window.llama.on('state:change', (p) => renderState(p as ServerState));
+   window.llama.on('log:lines', (p) => appendLog(p as string[]));
+   window.llama.on('banner:change', (p) => renderBanner(p as { version: string | null; update: string | null }));
++  window.llama.on('stats:request', (p) => {
++    const s = p as { latest: RoundStats | null; history: RoundStats[] };
++    renderStats(s.latest, s.history);
++  });
++  window.llama.on('stats:round', (p) => {
++    const s = p as { latest: RoundStats | null; history: RoundStats[] };
++    renderStats(s.latest, s.history);
++  });
+   window.llama.on('update:progress', (p) => {
+     const u = p as UpdateProgress;
+     const prog = $<HTMLProgressElement>('update-progress');
+@@ -478,6 +587,14 @@ function wireButtons(): void {
+   $<HTMLButtonElement>('btn-log-clear').addEventListener('click', () => {
+     $<HTMLDivElement>('log-view').textContent = '';
+   });
++  $<HTMLButtonElement>('chat-send').addEventListener('click', () => void chatSend());
++  $<HTMLButtonElement>('chat-clear').addEventListener('click', () => {
++    chatHistory.length = 0;
++    $<HTMLDivElement>('chat-msgs').textContent = '';
++  });
++  $<HTMLTextAreaElement>('chat-text').addEventListener('keydown', (e) => {
++    if (e.key === 'Enter' && e.ctrlKey) void chatSend();
++  });
+   const tabs = document.querySelectorAll('#tabs button');
+   for (const t of Array.from(tabs)) {
+     t.addEventListener('click', () => {
+@@ -540,6 +657,7 @@ async function main(): Promise<void> {
+   buildModelSelect(s.server.model);
+   renderState(s.server);
+   renderBanner(s.banner);
++  renderStats(s.stats.latest, s.stats.history);
+   await refreshProfiles();
+   subscribeEvents();
+ }
+diff --git a/src/renderer/styles.css b/src/renderer/styles.css
+index 3facbb8..5c2b1f4 100644
+--- a/src/renderer/styles.css
++++ b/src/renderer/styles.css
+@@ -43,3 +43,18 @@ summary { cursor: pointer; padding: 4px 8px; background: #2a2b31; border-radius:
+ #log-view { flex: 1; overflow-y: auto; padding: 8px 12px; font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; line-height: 1.5; }
+ .log-line { white-space: pre-wrap; word-break: break-all; min-height: 1.2em; }
+ .log-line.crash { color: #ff9ba0; font-weight: 700; }
++#stat-cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; padding: 10px; }
++.card { background: #1e2024; border: 1px solid #2a2b30; border-radius: 6px; padding: 10px 12px; }
++.card-label { color: #9a9b9f; font-size: 12px; margin-bottom: 6px; }
++.card-value { font-size: 18px; font-weight: 600; color: #e8e8e8; }
++.table-wrap { flex: 1; overflow-y: auto; padding: 0 10px 10px; }
++#stat-table { width: 100%; border-collapse: collapse; font-size: 12px; }
++#stat-table th { position: sticky; top: 0; background: #1e2024; color: #9a9b9f; text-align: left; padding: 6px 8px; border-bottom: 1px solid #2a2b30; }
++#stat-table td { padding: 5px 8px; border-bottom: 1px solid #232428; }
++#chat-msgs { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
++.chat-bubble { max-width: 78%; padding: 8px 12px; border-radius: 8px; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
++.chat-bubble.user { align-self: flex-end; background: #2b4a75; }
++.chat-bubble.assistant { align-self: flex-start; background: #26282e; }
++.chat-bubble.sys { align-self: center; color: #7f848e; font-size: 12px; }
++#chat-input { border-top: 1px solid #2a2b30; padding: 8px 10px; }
++#chat-text { width: 100%; background: #1a1b1e; border: 1px solid #3a3b40; color: #d4d4d4; border-radius: 4px; padding: 6px 8px; font-size: 13px; font-family: inherit; resize: vertical; }
+```
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add -A && git commit -m "renderer: stats cards/table + chat tab (SSE via proxy) + round stats wiring (spec §7/§3)"
+```
