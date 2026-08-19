@@ -1,31 +1,547 @@
-// renderer/main.ts — 占位界面（Task 15-17 替换为完整 UI：布局 §3 / 彩色日志 / 统计 / 聊天 / 轮次记录）
+// renderer/main.ts — 主 UI（规格 §3：顶栏 / 左栏设置 / 右栏 tabs）；Task 16-17 填充统计/聊天/轮次记录
+import { ansiHtml } from './ansi.js';
+import type { FormValues, ModelRef, ServerState, Profile, UpdateProgress, InstalledVersion } from '../shared/types.js';
+
+interface BootState {
+  appRoot: string;
+  form: FormValues;
+  server: ServerState;
+  union: ModelRef[];
+  installed: InstalledVersion[];
+  banner: { version: string | null; update: string | null };
+}
+
+interface ExitInfo { code: number | null; early: boolean; stderr: string; intentional: boolean }
+
 declare global {
   interface Window {
     llama: {
-      boot(): Promise<{ server: { status: string; port: number | null; model: string | null }; form: unknown }>;
-      startServer(form: unknown, model: unknown): Promise<void>;
+      boot(): Promise<BootState>;
+      scanModels(dir: string): Promise<unknown>;
+      startServer(form: FormValues, model: ModelRef): Promise<void>;
       stopServer(): Promise<void>;
-      saveForm(form: unknown): Promise<void>;
+      saveForm(form: FormValues): Promise<void>;
+      listProfiles(): Promise<Profile[]>;
+      saveProfile(model: string, params: FormValues): Promise<void>;
+      loadProfile(model: string): Promise<Profile | null>;
+      deleteProfile(model: string): Promise<void>;
+      checkUpdate(): Promise<{ latest: { tag_name: string; assets: unknown[] } | null; installed: InstalledVersion[] }>;
+      runUpdate(tag: string): Promise<{ ok: boolean; error?: string }>;
+      openDirDialog(defaultPath?: string): Promise<string | null>;
       on(channel: string, cb: (payload: unknown) => void): () => void;
     };
   }
 }
 
-async function main(): Promise<void> {
-  const app = document.getElementById('app');
-  if (!app) return;
-  app.textContent = '正在连接主进程…';
-  try {
-    const state = await window.llama.boot();
-    const srv = state.server;
-    app.textContent = `主进程已连接 | server: ${srv.status}${srv.port ? ` :${srv.port}` : ''}${srv.model ? ` ${srv.model}` : ''}`;
-    window.llama.on('state:change', (p: unknown) => {
-      const s = p as { status: string; port: number | null; model: string | null };
-      app.textContent = `state:change → ${s.status}${s.port ? ` :${s.port}` : ''}${s.model ? ` ${s.model}` : ''}`;
-    });
-  } catch (e) {
-    app.textContent = `主进程连接失败: ${String(e)}`;
+// ---------- 表单字段定义 ----------
+type FieldSpec = { id: keyof FormValues; label: string; type: 'text' | 'number' | 'checkbox' | 'select'; options?: [string, string][] };
+
+const GROUPS: { title: string; fields: FieldSpec[] }[] = [
+  { title: '模型', fields: [
+    { id: 'alias', label: '模型别名 (alias)', type: 'text' },
+    { id: 'mmprojAuto', label: '自动探测 mmproj（视觉）', type: 'checkbox' },
+    { id: 'mmproj', label: 'mmproj 路径（手动）', type: 'text' },
+    { id: 'mmprojUrl', label: 'mmproj URL', type: 'text' },
+    { id: 'mmprojOffload', label: 'mmproj 放到 GPU', type: 'checkbox' },
+    { id: 'imageMinTokens', label: '图像最小 token 数', type: 'text' },
+    { id: 'imageMaxTokens', label: '图像最大 token 数', type: 'text' },
+  ]},
+  { title: '服务', fields: [
+    { id: 'visiblePort', label: '可见端口（代理）', type: 'number' },
+    { id: 'proxyHost', label: '代理监听地址', type: 'text' },
+    { id: 'apiKey', label: 'API Key（空=不鉴权）', type: 'text' },
+    { id: 'timeout', label: '超时（秒）', type: 'text' },
+    { id: 'jinja', label: 'Jinja 模板', type: 'checkbox' },
+    { id: 'ui', label: '内置 WebUI', type: 'checkbox' },
+    { id: 'ssePingInterval', label: 'SSE ping 间隔（秒）', type: 'text' },
+    { id: 'corsOrigins', label: 'CORS Origins', type: 'text' },
+    { id: 'corsMethods', label: 'CORS Methods', type: 'text' },
+    { id: 'corsHeaders', label: 'CORS Headers', type: 'text' },
+    { id: 'corsCredentials', label: 'CORS withCredentials', type: 'checkbox' },
+  ]},
+  { title: '硬件', fields: [
+    { id: 'nGpuLayers', label: 'GPU 层数 (n-gpu-layers)', type: 'text' },
+    { id: 'threads', label: '线程数 (threads)', type: 'text' },
+    { id: 'threadsBatch', label: '批处理线程', type: 'text' },
+    { id: 'splitMode', label: 'GPU 切分方式', type: 'select', options: [['', '默认'], ['layer', 'layer'], ['row', 'row']] },
+    { id: 'device', label: '设备 (device)', type: 'text' },
+    { id: 'loadMode', label: '内存 (mlock/mmap)', type: 'text' },
+    { id: 'fit', label: '自动适配 (fit)', type: 'checkbox' },
+    { id: 'cacheTypeK', label: 'K 缓存类型', type: 'text' },
+    { id: 'cacheTypeV', label: 'V 缓存类型', type: 'text' },
+    { id: 'nCpuMoE', label: 'CPU MoE 专家数', type: 'text' },
+  ]},
+  { title: '上下文', fields: [
+    { id: 'ctxSize', label: '上下文长度 (ctx-size)', type: 'text' },
+    { id: 'parallel', label: '并行槽位 (parallel)', type: 'text' },
+    { id: 'batchSize', label: 'batch-size', type: 'text' },
+    { id: 'ubatchSize', label: 'ubatch-size', type: 'text' },
+    { id: 'cacheRam', label: 'KV 缓存内存 (GB)', type: 'text' },
+    { id: 'flashAttn', label: 'Flash attention', type: 'select', options: [['', '默认'], ['1', '开'], ['0', '关']] },
+    { id: 'swaFull', label: 'SWA 全注意力', type: 'checkbox' },
+  ]},
+  { title: '采样', fields: [
+    { id: 'temperature', label: 'temperature', type: 'text' },
+    { id: 'topK', label: 'top-k', type: 'text' },
+    { id: 'topP', label: 'top-p', type: 'text' },
+    { id: 'minP', label: 'min-p', type: 'text' },
+    { id: 'repeatPenalty', label: 'repeat-penalty', type: 'text' },
+    { id: 'presencePenalty', label: 'presence-penalty', type: 'text' },
+    { id: 'frequencyPenalty', label: 'frequency-penalty', type: 'text' },
+    { id: 'repeatLastN', label: 'repeat-last-n', type: 'text' },
+    { id: 'seed', label: 'seed（-1=随机）', type: 'text' },
+    { id: 'ignoreEos', label: 'ignore-eos', type: 'checkbox' },
+    { id: 'reasoningEffort', label: 'reasoning-effort', type: 'text' },
+    { id: 'reasoningPreserve', label: 'reasoning-preserve', type: 'checkbox' },
+  ]},
+  { title: '投机解码 (MTP)', fields: [
+    { id: 'specDefault', label: '默认启用 (spec-default)', type: 'checkbox' },
+    { id: 'specType', label: '方式', type: 'select', options: [['', '无'], ['mtp', 'MTP'], ['draft', 'draft']] },
+    { id: 'specDraftModel', label: '草稿模型（本地）', type: 'text' },
+    { id: 'specDraftHf', label: '草稿模型（HF）', type: 'text' },
+    { id: 'specDraftNMax', label: 'n-max', type: 'text' },
+    { id: 'specDraftNMin', label: 'n-min', type: 'text' },
+    { id: 'specDraftNgl', label: 'n-gl', type: 'text' },
+    { id: 'specDraftThreads', label: 'threads', type: 'text' },
+    { id: 'specDraftPSplit', label: 'p-split', type: 'text' },
+    { id: 'specDraftPMin', label: 'p-min', type: 'text' },
+  ]},
+  { title: '高级', fields: [
+    { id: 'verbosity', label: '日志详细程度', type: 'select', options: [['', '默认'], ['0', '0'], ['1', '1'], ['2', '2']] },
+    { id: 'warmup', label: 'warmup 运行', type: 'checkbox' },
+    { id: 'contextShift', label: 'context shift', type: 'checkbox' },
+    { id: 'cacheReuse', label: 'KV 缓存复用', type: 'checkbox' },
+    { id: 'perf', label: '性能日志 (perf)', type: 'checkbox' },
+    { id: 'logPromptsDir', label: 'prompt 保存目录', type: 'text' },
+    { id: 'mcpServersConfig', label: 'MCP 配置', type: 'text' },
+    { id: 'mtmdBatchMaxTokens', label: 'mtmd batch 最大 token', type: 'text' },
+    { id: 'specDraftBackendSampling', label: 'spec draft 后端采样', type: 'checkbox' },
+    { id: 'extraArgs', label: '额外参数（原样追加）', type: 'text' },
+  ]},
+];
+
+// ---------- 状态 ----------
+let form: FormValues | null = null;
+let union: ModelRef[] = [];
+let installed: InstalledVersion[] = [];
+let latestTag: string | null = null;
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
+const modelSelect = $<HTMLSelectElement>('model-select');
+const autoSwitchBox = $<HTMLInputElement>('auto-switch');
+const btnStart = $<HTMLButtonElement>('btn-start');
+const btnStop = $<HTMLButtonElement>('btn-stop');
+
+// ---------- 表单构建 ----------
+function buildForm(): void {
+  const host = $<HTMLDivElement>('form-groups');
+  host.textContent = '';
+  for (const g of GROUPS) {
+    const det = document.createElement('details');
+    det.open = g.title === '模型' || g.title === '服务';
+    const sum = document.createElement('summary');
+    sum.textContent = g.title;
+    det.appendChild(sum);
+    for (const f of g.fields) det.appendChild(buildField(f));
+    host.appendChild(det);
   }
+  // App 组（特殊字段）
+  const appHost = $<HTMLDivElement>('app-fields');
+  appHost.textContent = '';
+  appHost.appendChild(buildField({ id: 'autoSwitch', label: '自动切换（代理按请求切模型）', type: 'checkbox' }));
+  appHost.appendChild(buildDirField('scanDir', '模型扫描目录'));
+  appHost.appendChild(buildDirField('hfCacheDir', 'HF 缓存目录'));
+  appHost.appendChild(buildExeField());
+  appHost.appendChild(buildField({ id: 'recordRounds', label: '记录每轮 prompt/decode', type: 'checkbox' }));
+  appHost.appendChild(buildField({ id: 'recordsMaxTotalBytes', label: '记录总上限 (MB)', type: 'number' }));
+}
+
+function buildField(f: FieldSpec): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'field';
+  const label = document.createElement('label');
+  label.textContent = f.label;
+  row.appendChild(label);
+  let el: HTMLInputElement | HTMLSelectElement;
+  if (f.type === 'checkbox') {
+    el = document.createElement('input');
+    (el as HTMLInputElement).type = 'checkbox';
+    (el as HTMLInputElement).addEventListener('change', () => { if (form) { form[f.id] = (el as HTMLInputElement).checked as never; scheduleSave(); } });
+  } else if (f.type === 'select') {
+    el = document.createElement('select');
+    for (const [v, lab] of f.options ?? []) {
+      const o = document.createElement('option');
+      o.value = v; o.textContent = lab;
+      el.appendChild(o);
+    }
+    el.addEventListener('change', () => { if (form) { form[f.id] = el.value as never; scheduleSave(); } });
+  } else {
+    el = document.createElement('input');
+    (el as HTMLInputElement).type = f.type;
+    (el as HTMLInputElement).addEventListener('change', () => {
+      if (!form) return;
+      const v = (el as HTMLInputElement).value;
+      form[f.id] = (f.type === 'number' ? Number(v) : v) as never;
+      scheduleSave();
+    });
+  }
+  el.id = `f-${String(f.id)}`;
+  row.appendChild(el);
+  const spacer = document.createElement('span');
+  row.appendChild(spacer);
+  if (f.type === 'checkbox') el.style.gridColumn = '2';
+  return row;
+}
+
+function buildDirField(id: 'scanDir' | 'hfCacheDir', label: string): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'field';
+  const lab = document.createElement('label');
+  lab.textContent = label;
+  row.appendChild(lab);
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.id = `f-${id}`;
+  input.addEventListener('change', () => { if (form) { form[id] = input.value; scheduleSave(); } });
+  row.appendChild(input);
+  const btn = document.createElement('button');
+  btn.textContent = '浏览…';
+  btn.style.padding = '3px 8px';
+  btn.addEventListener('click', async () => {
+    const dir = await window.llama.openDirDialog(input.value);
+    if (dir !== null) { input.value = dir; if (form) { form[id] = dir; scheduleSave(); } }
+  });
+  row.appendChild(btn);
+  return row;
+}
+
+function buildExeField(): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'field';
+  const lab = document.createElement('label');
+  lab.textContent = 'llama.cpp 版本';
+  row.appendChild(lab);
+  const sel = document.createElement('select');
+  sel.id = 'exe-select';
+  row.appendChild(sel);
+  const spacer = document.createElement('span');
+  row.appendChild(spacer);
+  const row2 = document.createElement('div');
+  row2.className = 'field';
+  row2.style.marginLeft = '8px';
+  row2.style.display = 'none';
+  const lab2 = document.createElement('label');
+  lab2.textContent = '自定义 exe 路径';
+  row2.appendChild(lab2);
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.id = 'exe-custom';
+  row2.appendChild(input);
+  const s2 = document.createElement('span');
+  row2.appendChild(s2);
+  const sync = (): void => {
+    if (!form) return;
+    const custom = sel.value === '__custom__';
+    row2.style.display = custom ? 'grid' : 'none';
+    form.exeSelection = custom ? input.value : sel.value;
+    scheduleSave();
+  };
+  sel.addEventListener('change', sync);
+  input.addEventListener('change', sync);
+  (sel as HTMLSelectElement & { __sync?: () => void }).__sync = sync;
+  (sel as HTMLSelectElement & { __fill?: () => void }).__fill = fillExeOptions;
+  fillExeOptions();
+  return row;
+}
+
+function fillExeOptions(): void {
+  const sel = $<HTMLSelectElement>('exe-select');
+  const cur = form ? form.exeSelection : '';
+  sel.textContent = '';
+  const o0 = document.createElement('option');
+  o0.value = ''; o0.textContent = '默认（托管基线 b10488）';
+  sel.appendChild(o0);
+  for (const v of installed) {
+    const o = document.createElement('option');
+    o.value = v.tag;
+    o.textContent = `${v.tag}${v.valid === false ? '（校验失败）' : ''}${v.cudaVersion ? ` CUDA ${v.cudaVersion}` : ''}（已安装）`;
+    sel.appendChild(o);
+  }
+  const oc = document.createElement('option');
+  oc.value = '__custom__'; oc.textContent = '自定义路径…';
+  sel.appendChild(oc);
+  if (cur === '') sel.value = '';
+  else if (installed.some((v) => v.tag === cur)) sel.value = cur;
+  else { sel.value = '__custom__'; (document.getElementById('exe-custom') as HTMLInputElement).value = cur; }
+}
+
+// ---------- 表单填充 ----------
+function populateForm(): void {
+  if (!form) return;
+  for (const g of GROUPS) {
+    for (const f of g.fields) {
+      const el = document.getElementById(`f-${String(f.id)}`);
+      if (!el) continue;
+      const v = form[f.id];
+      if (f.type === 'checkbox') (el as HTMLInputElement).checked = v === true;
+      else (el as HTMLInputElement | HTMLSelectElement).value = String(v ?? '');
+    }
+  }
+  const set = (id: string, v: unknown): void => {
+    const el = document.getElementById(`f-${id}`);
+    if (!el) return;
+    if ((el as HTMLInputElement).type === 'checkbox') (el as HTMLInputElement).checked = v === true;
+    else (el as HTMLInputElement | HTMLSelectElement).value = String(v ?? '');
+  };
+  set('recordRounds', form.recordRounds);
+  const mbEl = document.getElementById('f-recordsMaxTotalBytes') as HTMLInputElement | null;
+  if (mbEl) mbEl.value = String(Math.round(form.recordsMaxTotalBytes / 1048576));
+  set('scanDir', form.scanDir);
+  set('hfCacheDir', form.hfCacheDir);
+  const autoEl = document.getElementById('f-autoSwitch') as HTMLInputElement | null;
+  if (autoEl) autoEl.checked = form.autoSwitch;
+  autoSwitchBox.checked = form.autoSwitch;
+  fillExeOptions();
+  (document.getElementById('exe-select') as HTMLSelectElement & { __sync?: () => void })?.__sync?.();
+}
+
+// ---------- 保存（防抖 600ms） ----------
+function scheduleSave(): void {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    if (form) void window.llama.saveForm(form).catch((e) => showTopError(`保存设置失败: ${String(e)}`));
+  }, 600);
+}
+
+function showTopError(msg: string): void {
+  const el = $<HTMLSpanElement>('top-error');
+  el.textContent = msg;
+  setTimeout(() => { if (el.textContent === msg) el.textContent = ''; }, 10000);
+}
+
+// ---------- 模型下拉 ----------
+function buildModelSelect(current: string | null): void {
+  modelSelect.textContent = '';
+  if (union.length === 0) {
+    const o = document.createElement('option');
+    o.value = ''; o.textContent = '（无模型：请先扫描目录）';
+    modelSelect.appendChild(o);
+    return;
+  }
+  for (const m of union) {
+    const o = document.createElement('option');
+    o.value = m.name;
+    o.textContent = `${m.name}${m.source === 'hf' ? ' [HF]' : ''}${m.local?.mmproj ? ' +mmproj' : ''}`;
+    modelSelect.appendChild(o);
+  }
+  if (current !== null) {
+    const hit = union.find((m) => m.name.toLowerCase() === current.toLowerCase());
+    if (hit) modelSelect.value = hit.name;
+  }
+}
+
+// ---------- 状态渲染 ----------
+const STATUS_UI: Record<ServerState['status'], [string, string]> = {
+  stopped: ['已停止', 'gray'],
+  starting: ['启动中…', 'yellow'],
+  running: ['运行中', 'green'],
+  switching: ['切换模型中…', 'cyan'],
+  crashed: ['已崩溃', 'red'],
+};
+
+function renderState(s: ServerState): void {
+  const [text, color] = STATUS_UI[s.status];
+  const badge = $<HTMLSpanElement>('status-badge');
+  badge.textContent = s.status === 'crashed' && s.exitCode !== null ? `${text} (exit ${s.exitCode})` : text;
+  badge.className = `badge ${color}`;
+  const info = $<HTMLSpanElement>('port-info');
+  const parts: string[] = [];
+  if (s.model !== null) parts.push(s.model);
+  if (s.port !== null && form) parts.push(`内部 :${s.port} → 可见 :${form.visiblePort}`);
+  info.textContent = parts.join('  ');
+  const busy = s.status === 'starting' || s.status === 'switching';
+  btnStart.disabled = busy;
+  btnStart.textContent = s.status === 'running' || s.status === 'switching' ? '重启（新模型）' : '启动';
+  btnStop.disabled = s.status === 'stopped' || s.status === 'starting';
+}
+
+// ---------- 日志 ----------
+const MAX_LOG_LINES = 3000;
+function appendLog(lines: string[], cls = ''): void {
+  const view = $<HTMLDivElement>('log-view');
+  const follow = ($<HTMLInputElement>('log-follow')).checked;
+  const nearBottom = view.scrollHeight - view.scrollTop - view.clientHeight < 48;
+  for (const line of lines) {
+    const div = document.createElement('div');
+    div.className = `log-line${cls ? ` ${cls}` : ''}`;
+    div.innerHTML = cls === 'crash' ? line.replace(/&/g, '&amp;').replace(/</g, '&lt;') : ansiHtml(line);
+    view.appendChild(div);
+  }
+  while (view.children.length > MAX_LOG_LINES) view.removeChild(view.firstChild!);
+  if (follow && nearBottom) view.scrollTop = view.scrollHeight;
+}
+
+// ---------- 横幅 ----------
+function renderBanner(b: { version: string | null; update: string | null }): void {
+  const v = $<HTMLSpanElement>('banner-version');
+  v.textContent = b.version ?? '';
+  v.className = `banner${b.version && b.version.includes('低于基线') ? ' warn' : ''}`;
+  const u = $<HTMLSpanElement>('banner-update');
+  u.textContent = b.update ?? '';
+  u.className = 'banner info';
+}
+
+// ---------- Profiles（选中即应用 / 手动保存，规格 §5.1） ----------
+async function refreshProfiles(): Promise<void> {
+  const list = await window.llama.listProfiles();
+  const sel = $<HTMLSelectElement>('profile-select');
+  sel.textContent = '';
+  const o0 = document.createElement('option');
+  o0.value = ''; o0.textContent = '（已保存的参数组）';
+  sel.appendChild(o0);
+  for (const p of list) {
+    const o = document.createElement('option');
+    o.value = p.model;
+    o.textContent = `${p.model}  ${new Date(p.savedAt).toLocaleString()}`;
+    sel.appendChild(o);
+  }
+}
+
+function currentModelKey(): string | null {
+  const m = union.find((x) => x.name === modelSelect.value);
+  if (!m) return null;
+  return m.local ? m.local.path : m.name;
+}
+
+// ---------- 更新 ----------
+async function doCheckUpdate(): Promise<void> {
+  const st = $<HTMLDivElement>('update-status');
+  st.textContent = '检查中…';
+  try {
+    const r = await window.llama.checkUpdate();
+    installed = r.installed;
+    latestTag = r.latest ? r.latest.tag_name : null;
+    const run = $<HTMLButtonElement>('btn-update-run');
+    run.disabled = latestTag === null;
+    st.textContent = latestTag ? `最新版本 ${latestTag}` : '已是最新';
+    fillExeOptions();
+  } catch (e) {
+    st.textContent = `检查失败: ${String(e)}`;
+  }
+}
+
+// ---------- 事件订阅 ----------
+function subscribeEvents(): void {
+  window.llama.on('state:change', (p) => renderState(p as ServerState));
+  window.llama.on('log:lines', (p) => appendLog(p as string[]));
+  window.llama.on('banner:change', (p) => renderBanner(p as { version: string | null; update: string | null }));
+  window.llama.on('update:progress', (p) => {
+    const u = p as UpdateProgress;
+    const prog = $<HTMLProgressElement>('update-progress');
+    prog.value = u.pct >= 0 ? u.pct : 0;
+    $<HTMLDivElement>('update-msg').textContent = u.mbps > 0 ? `${u.message}（${u.mbps.toFixed(1)} MB/s）` : u.message;
+  });
+  window.llama.on('exit:crash', (p) => {
+    const e = p as ExitInfo;
+    appendLog([`进程退出（code ${e.code ?? '?'}${e.early ? '，启动早期' : ''}）—— 上方彩色日志为诊断线索`], 'crash');
+  });
+}
+
+// ---------- 按钮 ----------
+function wireButtons(): void {
+  btnStart.addEventListener('click', async () => {
+    const m = union.find((x) => x.name === modelSelect.value);
+    if (!form) return;
+    if (!m) { showTopError('请先扫描模型目录并选择模型'); return; }
+    btnStart.disabled = true;
+    try {
+      await window.llama.saveForm(form); // 启动即保存（规格 §5.1）
+      await window.llama.startServer(form, m);
+    } catch (e) {
+      showTopError(String(e));
+      renderState({ status: 'stopped', port: null, model: null, exitCode: null });
+    }
+  });
+  btnStop.addEventListener('click', async () => {
+    btnStop.disabled = true;
+    try { await window.llama.stopServer(); } catch (e) { showTopError(String(e)); }
+  });
+  autoSwitchBox.addEventListener('change', () => {
+    if (!form) return;
+    form.autoSwitch = autoSwitchBox.checked;
+    const el = document.getElementById('f-autoSwitch') as HTMLInputElement | null;
+    if (el) el.checked = form.autoSwitch;
+    scheduleSave();
+  });
+  $<HTMLButtonElement>('btn-log-clear').addEventListener('click', () => {
+    $<HTMLDivElement>('log-view').textContent = '';
+  });
+  const tabs = document.querySelectorAll('#tabs button');
+  for (const t of Array.from(tabs)) {
+    t.addEventListener('click', () => {
+      for (const x of Array.from(tabs)) x.classList.remove('active');
+      t.classList.add('active');
+      const name = t.getAttribute('data-tab') ?? 'logs';
+      for (const tab of Array.from(document.querySelectorAll('.tab'))) {
+        tab.classList.toggle('hidden', `tab-${name}` !== tab.id);
+      }
+    });
+  }
+  $<HTMLButtonElement>('btn-profile-apply').addEventListener('click', async () => {
+    const key = $<HTMLSelectElement>('profile-select').value;
+    if (!key || !form) return;
+    const p = await window.llama.loadProfile(key);
+    if (p && p.params) {
+      form = { ...form, ...p.params };
+      populateForm();
+      scheduleSave();
+    }
+  });
+  $<HTMLButtonElement>('btn-profile-save').addEventListener('click', async () => {
+    const key = currentModelKey();
+    if (!key || !form) { showTopError('未选择模型，无法保存参数组'); return; }
+    await window.llama.saveProfile(key, form);
+    await refreshProfiles();
+  });
+  $<HTMLButtonElement>('btn-profile-del').addEventListener('click', async () => {
+    const key = $<HTMLSelectElement>('profile-select').value;
+    if (!key) return;
+    await window.llama.deleteProfile(key);
+    await refreshProfiles();
+  });
+  $<HTMLButtonElement>('btn-update-check').addEventListener('click', () => void doCheckUpdate());
+  $<HTMLButtonElement>('btn-update-run').addEventListener('click', async () => {
+    if (!latestTag) return;
+    const run = $<HTMLButtonElement>('btn-update-run');
+    run.disabled = true;
+    try {
+      const res = await window.llama.runUpdate(latestTag);
+      $<HTMLDivElement>('update-status').textContent = res.ok ? `更新完成（${latestTag}）` : `更新失败: ${res.error ?? '未知错误'}`;
+      run.disabled = false;
+      fillExeOptions();
+    } catch (e) {
+      $<HTMLDivElement>('update-status').textContent = `更新失败: ${String(e)}`;
+      run.disabled = false;
+    }
+  });
+}
+
+// ---------- 启动 ----------
+async function main(): Promise<void> {
+  buildForm();
+  wireButtons();
+  const s = await window.llama.boot();
+  form = s.form;
+  union = s.union;
+  installed = s.installed;
+  populateForm();
+  buildModelSelect(s.server.model);
+  renderState(s.server);
+  renderBanner(s.banner);
+  await refreshProfiles();
+  subscribeEvents();
 }
 void main();
 export {};

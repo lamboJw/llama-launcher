@@ -6,7 +6,62 @@
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <div id="app">scaffold ok</div>
+  <div id="topbar">
+    <select id="model-select" title="模型（并集：本地 + HF）"></select>
+    <label class="chk"><input type="checkbox" id="auto-switch" /> 自动切换</label>
+    <button id="btn-start">启动</button>
+    <button id="btn-stop" class="stop">停止</button>
+    <span id="status-badge" class="badge gray">stopped</span>
+    <span id="port-info" class="muted"></span>
+    <span id="banner-version" class="banner"></span>
+    <span id="banner-update" class="banner info"></span>
+    <span id="top-error" class="banner warn"></span>
+  </div>
+  <div id="main">
+    <div id="left">
+      <div id="form-groups"></div>
+      <details id="app-group"><summary>App 设置</summary><div id="app-fields"></div></details>
+      <div id="profile-bar">
+        <select id="profile-select"></select>
+        <button id="btn-profile-apply">应用</button>
+        <button id="btn-profile-save">保存</button>
+        <button id="btn-profile-del" class="stop">删除</button>
+      </div>
+      <div id="update-box">
+        <div id="update-status" class="muted">尚未检查更新</div>
+        <div class="row">
+          <button id="btn-update-check">检查更新</button>
+          <button id="btn-update-run" disabled>立即更新</button>
+        </div>
+        <progress id="update-progress" max="100" value="0"></progress>
+        <div id="update-msg" class="muted"></div>
+      </div>
+    </div>
+    <div id="right">
+      <div id="tabs">
+        <button data-tab="logs" class="active">日志</button>
+        <button data-tab="stats">统计</button>
+        <button data-tab="chat">聊天</button>
+        <button data-tab="records">轮次记录</button>
+      </div>
+      <div id="tab-logs" class="tab">
+        <div class="toolbar">
+          <label class="chk"><input type="checkbox" id="log-follow" checked /> 跟随滚动</label>
+          <button id="btn-log-clear">清空</button>
+        </div>
+        <div id="log-view"></div>
+      </div>
+      <div id="tab-stats" class="tab hidden">
+        <div class="placeholder">统计面板（Task 16）</div>
+      </div>
+      <div id="tab-chat" class="tab hidden">
+        <div class="placeholder">内置测试聊天（Task 16）</div>
+      </div>
+      <div id="tab-records" class="tab hidden">
+        <div class="placeholder">轮次记录（Task 17）</div>
+      </div>
+    </div>
+  </div>
   <script type="module" src="./main.js"></script>
 </body>
 </html>
