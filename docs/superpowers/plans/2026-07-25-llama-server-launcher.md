@@ -6328,3 +6328,120 @@ index 5c2b1f4..0d3fc46 100644
 ```bash
 git add -A && git commit -m "renderer: records tab (pagination/refresh) + live recordRounds toggle (spec §3)"
 ```
+
+---
+
+### Task 18: 打包 — electron-builder dir → 便携 zip（规格 §9.2，计划偏差 2）
+
+**Files:**
+- Modify: `electron-builder.yml`（Task 1 已建，本任务验证：dir target、output=release、files=dist/**+package.json）
+- Create: `scripts/zip-release.mjs`（dir 产物 → 便携 zip）
+- Modify: `package.json`（+ electron-builder devDep、+ author；`package` 脚本 = build → electron-builder --win dir → zip-release.mjs）
+
+流程：`npm run build`（tsc×2 + copy-assets）→ `electron-builder --win dir`（下载 electron 43.4.0 win32-x64 → `release/win-unpacked/`，app.asar 含 dist/{main,preload,renderer} + node_modules/adm-zip + package.json）→ `zip-release.mjs`：校验 `llama-launcher.exe` 存在 → 目录重命名为 `llama-launcher/`（被占用则保持原名）→ 优先 `tar -a`（流式）失败回退 adm-zip → `release/llama-launcher-<version>-portable-win32-x64.zip`。
+
+环境注意（本机实测）：GitHub 资产直连超时（20.205.243.x ETIMEDOUT），electron 运行时经 npmmirror 下载：
+`ELECTRON_MIRROR=https://registry.npmmirror.com/-/binary/electron/ ELECTRON_BUILDER_BINARIES_MIRROR=https://registry.npmmirror.com/-/binary/electron-builder-binaries/ npm run package`。
+
+冒烟验证（实测）：
+- 打包产物：`release/llama-launcher-0.1.0-portable-win32-x64.zip`（140.8 MB，根目录 `llama-launcher/`，exe 225.5 MB + resources/app.asar 268 KB + locales/paks 齐全）。
+- 启动冒烟：`llama-launcher.exe --enable-logging` 运行 15s 无渲染层报错，窗口标题「llama-server 启动器」正常（Electron 4 进程组）。
+- 冒烟发现并修复 1 个 bug：`buildExeField()` 在 select 未入 DOM 时即调用 `fillExeOptions()` → `Cannot set properties of null`；移除该早期调用（`populateForm` 已在 boot 后调用）。
+- asar 内容核验（手工解析 asar 头）：dist/main 14 模块 + dist/preload/index.js + dist/renderer/{ansi.js,index.html,main.js,styles.css} + adm-zip 17 文件 + package.json，共 39 条目。
+
+提交：`1a81271`（4 files，+3628/-215；package-lock 含 electron-builder 依赖树），typecheck 干净，14 套件 123/123 测试通过。
+
+- [ ] **Step 1: electron-builder.yml（已存在，验证）**
+
+```yaml
+appId: com.lambojw.llamalauncher
+productName: llama-launcher
+directories:
+  output: release
+files:
+  - dist/**
+  - package.json
+win:
+  target: dir
+```
+
+- [ ] **Step 2: scripts/zip-release.mjs**
+
+```js
+// scripts/zip-release.mjs — Task 18：electron-builder dir 产物 → 便携 zip（规格 §9.2，计划偏差 2）
+// 用法：npm run package（build → electron-builder --win dir → 本脚本）
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { readdir, rm, stat, readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const execFileAsync = promisify(execFile);
+const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+const releaseDir = path.join(root, 'release');
+
+const entries = await readdir(releaseDir, { withFileTypes: true });
+const folder = entries.find((e) => e.isDirectory() && (e.name === 'win-unpacked' || /-win32-x64$/.test(e.name)));
+if (!folder) {
+  console.error('[zip-release] 未找到 electron-builder dir 产物（release/win-unpacked 或 release/*-win32-x64/）');
+  process.exit(1);
+}
+let src = path.join(releaseDir, folder.name);
+const exe = path.join(src, 'llama-launcher.exe');
+if (!(await stat(exe).then(() => true, () => false))) {
+  console.error('[zip-release] 产物缺少 llama-launcher.exe：' + exe);
+  process.exit(1);
+}
+
+// 产物目录重命名为 llama-launcher/（zip 根目录更直观）；被占用时保持原名
+let zipRoot = folder.name;
+const pretty = path.join(releaseDir, 'llama-launcher');
+if (folder.name !== 'llama-launcher') {
+  await rm(pretty, { recursive: true, force: true });
+  try {
+    await (await import('node:fs/promises')).rename(src, pretty);
+    src = pretty;
+    zipRoot = 'llama-launcher';
+  } catch { /* 目录被占用（例如正在运行）→ 保持原名 */ }
+}
+
+const zipName = 'llama-launcher-' + pkg.version + '-portable-win32-x64.zip';
+const zipPath = path.join(releaseDir, zipName);
+await rm(zipPath, { force: true });
+
+// 优先 Windows 10+ 自带 bsdtar（流式、低内存）；失败回退 adm-zip
+let used = 'tar';
+try {
+  await execFileAsync('tar', ['-a', '-c', '-f', zipPath, '-C', releaseDir, zipRoot], { maxBuffer: 64 * 1024 * 1024 });
+} catch (e) {
+  used = 'adm-zip';
+  await rm(zipPath, { force: true });
+  const AdmZip = (await import('adm-zip')).default;
+  const zip = new AdmZip();
+  zip.addLocalFolder(src, zipRoot);
+  zip.writeZip(zipPath);
+}
+
+const z = await stat(zipPath);
+const mb = (n) => (n / 1048576).toFixed(1);
+console.log('[zip-release] ' + zipName + '（' + mb(z.size) + ' MB，' + used + '）根目录 ' + zipRoot + '/');
+console.log('[zip-release] 解压即用：llama.cpp 托管目录位于 ' + zipRoot + '/llama.cpp/（首次启动时自动创建）');
+```
+
+- [ ] **Step 3: 安装 electron-builder + 打包 + 冒烟**
+
+运行：`npm i -D electron-builder@^26 && ELECTRON_MIRROR=... npm run package`（镜像见上）→ 启动冒烟 → 修复 exe-select 时序 bug → 重新打包。
+预期：zip 生成（~141 MB）、app 窗口正常启动无报错。
+
+- [ ] **Step 4: 提交**
+
+```bash
+git add -A && git commit -m "package: electron-builder dir + portable zip script; fix exe-select populate timing (spec §9.2)"
+```
+
+## 完成（全部 18 任务）
+
+- 14 测试套件 / 123 测试全绿；typecheck + build + package 通过。
+- 便携 zip：`release/llama-launcher-0.1.0-portable-win32-x64.zip`（140.8 MB，解压即用，冒烟通过）。
+- 全部提交已推送 origin/main（github.com:lamboJw/llama-launcher）。
