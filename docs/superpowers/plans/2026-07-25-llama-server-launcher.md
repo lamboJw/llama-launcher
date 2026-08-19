@@ -6097,3 +6097,234 @@ index 3facbb8..5c2b1f4 100644
 ```bash
 git add -A && git commit -m "renderer: stats cards/table + chat tab (SSE via proxy) + round stats wiring (spec §7/§3)"
 ```
+
+---
+
+### Task 17: renderer — 轮次记录 tab（规格 §3 勾选项）+ 运行中切换 recordRounds
+
+**Files:**
+- Modify: `src/main/index.ts`（`form:save`：recordRounds 切换 → 重建 RecordsStore + `proxy.setRecords` 立即生效）
+- Modify: `src/renderer/index.html`（记录 tab：状态栏/视图/分页器）
+- Modify: `src/renderer/styles.css`（.rec 卡片样式）
+- Modify: `src/renderer/main.ts`（loadRecords/renderRecord/分页 + 统计事件驱动自动刷新）
+
+语义：每页 50 条（`recordsTail(page)`，page 0 = 最新，JSONL 尾部读取）；「← 更新 / 更早 →」翻页；每轮卡片 = 时间 / 模型 / TTFT + prompt / decode 两个 pre 块（textContent 注入，无 HTML 注入面）。未启用时显示提示（启用入口 = App 组「记录每轮 prompt/decode」复选框；主进程侧现在支持运行中切换：`form:save` 重建 store 并 `proxy.setRecords`，无需重启服务器）。记录事件驱动：`stats:round` 触发且记录 tab 在前台时自动重载当前页。boot payload 已含 `recordsDir`（本任务接入展示）。
+
+提交：`18df377`（4 files, +105/-2），typecheck 干净，123/123 测试通过。
+
+- [ ] **Step 1-4: 实现（见提交 diff）**
+
+```diff
+diff --git a/src/main/index.ts b/src/main/index.ts
+index f173452..fc24db0 100644
+--- a/src/main/index.ts
++++ b/src/main/index.ts
+@@ -220,6 +220,10 @@ function registerIpc(): void {
+     const prev = config.getSettings().form;
+     config.saveSettings({ form });
+     if (proxy) proxy.setForm({ ...form }); // CORS 等立即生效
++    if (form.recordRounds !== prev.recordRounds) {
++      records = form.recordRounds ? new RecordsStore(recordsDir, { maxTotalBytes: form.recordsMaxTotalBytes }) : null;
++      if (proxy) proxy.setRecords(records); // 运行中切换立即生效
++    }
+     if (form.autoSwitch !== prev.autoSwitch || form.hfCacheDir !== prev.hfCacheDir || form.scanDir !== prev.scanDir) {
+       await refreshUnion();
+     }
+diff --git a/src/renderer/index.html b/src/renderer/index.html
+index 36cc4ae..890bf5d 100644
+--- a/src/renderer/index.html
++++ b/src/renderer/index.html
+@@ -77,7 +77,17 @@
+         </div>
+       </div>
+       <div id="tab-records" class="tab hidden">
+-        <div class="placeholder">轮次记录（Task 17）</div>
++        <div id="records-bar">
++          <span id="records-state">…</span>
++          <span id="records-dir"></span>
++          <button id="records-refresh">刷新</button>
++        </div>
++        <div id="records-view"></div>
++        <div id="records-pager">
++          <button id="records-prev">← 更新</button>
++          <span id="records-page">第 0 页</span>
++          <button id="records-next">更早 →</button>
++        </div>
+       </div>
+     </div>
+   </div>
+diff --git a/src/renderer/main.ts b/src/renderer/main.ts
+index 78df373..e947c2d 100644
+--- a/src/renderer/main.ts
++++ b/src/renderer/main.ts
+@@ -1,6 +1,6 @@
+ // renderer/main.ts — 主 UI（规格 §3：顶栏 / 左栏设置 / 右栏 tabs）；Task 16-17 填充统计/聊天/轮次记录
+ import { ansiHtml } from './ansi.js';
+-import type { FormValues, ModelRef, ServerState, Profile, RoundStats, UpdateProgress, InstalledVersion } from '../shared/types.js';
++import type { FormValues, ModelRef, ServerState, Profile, RoundRecord, RoundStats, UpdateProgress, InstalledVersion } from '../shared/types.js';
+ 
+ interface BootState {
+   appRoot: string;
+@@ -10,6 +10,7 @@ interface BootState {
+   installed: InstalledVersion[];
+   banner: { version: string | null; update: string | null };
+   stats: { latest: RoundStats | null; history: RoundStats[] };
++  recordsDir: string;
+ }
+ 
+ interface ExitInfo { code: number | null; early: boolean; stderr: string; intentional: boolean }
+@@ -29,6 +30,8 @@ declare global {
+       checkUpdate(): Promise<{ latest: { tag_name: string; assets: unknown[] } | null; installed: InstalledVersion[] }>;
+       runUpdate(tag: string): Promise<{ ok: boolean; error?: string }>;
+       openDirDialog(defaultPath?: string): Promise<string | null>;
++      recordFiles(): Promise<string[]>;
++      recordsTail(page: number): Promise<{ records: RoundRecord[]; hasMore: boolean }>;
+       on(channel: string, cb: (payload: unknown) => void): () => void;
+     };
+   }
+@@ -127,6 +130,10 @@ let union: ModelRef[] = [];
+ let installed: InstalledVersion[] = [];
+ let latestTag: string | null = null;
+ let serverState: ServerState = { status: 'stopped', port: null, model: null, exitCode: null };
++let activeTab = 'logs';
++let recordsDir = '';
++let recPage = 0;
++let recHasMore = false;
+ let saveTimer: ReturnType<typeof setTimeout> | null = null;
+ 
+ const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
+@@ -533,6 +540,70 @@ async function chatSend(): Promise<void> {
+   }
+ }
+ 
++// ---------- 轮次记录（规格 §3 勾选项） ----------
++async function loadRecords(): Promise<void> {
++  const box = $<HTMLDivElement>('records-view');
++  const state = $<HTMLSpanElement>('records-state');
++  const dirEl = $<HTMLSpanElement>('records-dir');
++  box.textContent = '';
++  dirEl.textContent = recordsDir !== '' ? `目录: ${recordsDir}` : '';
++  if (!form || !form.recordRounds) {
++    state.textContent = '未启用（App 组勾选「记录每轮 prompt/decode」；运行中切换立即生效）';
++    const d = document.createElement('div');
++    d.className = 'placeholder';
++    d.textContent = '启用后，每一轮请求的 prompt 与 decode 内容将记录在本地（JSONL 分文件，总量受 App 组上限约束）';
++    box.appendChild(d);
++    $<HTMLButtonElement>('records-prev').disabled = true;
++    $<HTMLButtonElement>('records-next').disabled = true;
++    return;
++  }
++  state.textContent = '已启用';
++  const files = await window.llama.recordFiles();
++  dirEl.textContent = files.length > 0 ? `${files.length} 个记录文件` : '（暂无记录）';
++  const page = await window.llama.recordsTail(recPage);
++  recHasMore = page.hasMore;
++  for (const r of page.records) box.appendChild(renderRecord(r));
++  if (page.records.length === 0) {
++    const d = document.createElement('div');
++    d.className = 'placeholder';
++    d.textContent = '（本页无记录）';
++    box.appendChild(d);
++  }
++  $<HTMLDivElement>('records-view').scrollTop = 0;
++  $<HTMLSpanElement>('records-page').textContent = `第 ${recPage} 页（每页 50，第 0 页最新）`;
++  $<HTMLButtonElement>('records-prev').disabled = recPage === 0;
++  $<HTMLButtonElement>('records-next').disabled = !recHasMore;
++}
++
++function renderRecord(r: RoundRecord): HTMLElement {
++  const d = document.createElement('div');
++  d.className = 'rec';
++  const head = document.createElement('div');
++  head.className = 'rec-head';
++  head.innerHTML = `<span><b>${new Date(r.ts).toLocaleString()}</b></span>`;
++  const mEl = document.createElement('span');
++  mEl.textContent = `模型: ${r.model}`;
++  head.appendChild(mEl);
++  if (r.ttft_ms !== null) {
++    const t = document.createElement('span');
++    t.textContent = `TTFT: ${r.ttft_ms} ms`;
++    head.appendChild(t);
++  }
++  d.appendChild(head);
++  const mk = (lbl: string, text: string): void => {
++    const l = document.createElement('div');
++    l.className = 'lbl';
++    l.textContent = lbl;
++    d.appendChild(l);
++    const pre = document.createElement('pre');
++    pre.textContent = text === '' ? '（空）' : text;
++    d.appendChild(pre);
++  };
++  mk('prompt', r.prompt);
++  mk('decode', r.decode);
++  return d;
++}
++
+ // ---------- 事件订阅 ----------
+ function subscribeEvents(): void {
+   window.llama.on('state:change', (p) => renderState(p as ServerState));
+@@ -545,6 +616,7 @@ function subscribeEvents(): void {
+   window.llama.on('stats:round', (p) => {
+     const s = p as { latest: RoundStats | null; history: RoundStats[] };
+     renderStats(s.latest, s.history);
++    if (activeTab === 'records' && form?.recordRounds) void loadRecords();
+   });
+   window.llama.on('update:progress', (p) => {
+     const u = p as UpdateProgress;
+@@ -587,6 +659,9 @@ function wireButtons(): void {
+   $<HTMLButtonElement>('btn-log-clear').addEventListener('click', () => {
+     $<HTMLDivElement>('log-view').textContent = '';
+   });
++  $<HTMLButtonElement>('records-refresh').addEventListener('click', () => void loadRecords());
++  $<HTMLButtonElement>('records-prev').addEventListener('click', () => { recPage = Math.max(0, recPage - 1); void loadRecords(); });
++  $<HTMLButtonElement>('records-next').addEventListener('click', () => { if (recHasMore) { recPage += 1; void loadRecords(); } });
+   $<HTMLButtonElement>('chat-send').addEventListener('click', () => void chatSend());
+   $<HTMLButtonElement>('chat-clear').addEventListener('click', () => {
+     chatHistory.length = 0;
+@@ -601,9 +676,11 @@ function wireButtons(): void {
+       for (const x of Array.from(tabs)) x.classList.remove('active');
+       t.classList.add('active');
+       const name = t.getAttribute('data-tab') ?? 'logs';
++      activeTab = name;
+       for (const tab of Array.from(document.querySelectorAll('.tab'))) {
+         tab.classList.toggle('hidden', `tab-${name}` !== tab.id);
+       }
++      if (name === 'records') void loadRecords();
+     });
+   }
+   $<HTMLButtonElement>('btn-profile-apply').addEventListener('click', async () => {
+@@ -652,6 +729,7 @@ async function main(): Promise<void> {
+   const s = await window.llama.boot();
+   form = s.form;
+   union = s.union;
++  recordsDir = s.recordsDir;
+   installed = s.installed;
+   populateForm();
+   buildModelSelect(s.server.model);
+diff --git a/src/renderer/styles.css b/src/renderer/styles.css
+index 5c2b1f4..0d3fc46 100644
+--- a/src/renderer/styles.css
++++ b/src/renderer/styles.css
+@@ -58,3 +58,14 @@ summary { cursor: pointer; padding: 4px 8px; background: #2a2b31; border-radius:
+ .chat-bubble.sys { align-self: center; color: #7f848e; font-size: 12px; }
+ #chat-input { border-top: 1px solid #2a2b30; padding: 8px 10px; }
+ #chat-text { width: 100%; background: #1a1b1e; border: 1px solid #3a3b40; color: #d4d4d4; border-radius: 4px; padding: 6px 8px; font-size: 13px; font-family: inherit; resize: vertical; }
++#records-bar { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid #2a2b30; color: #9a9b9f; font-size: 12px; }
++#records-bar button { margin-left: auto; padding: 3px 10px; }
++#records-view { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
++.rec { background: #1e2024; border: 1px solid #2a2b30; border-radius: 6px; padding: 8px 10px; }
++.rec-head { display: flex; gap: 12px; color: #9a9b9f; font-size: 12px; margin-bottom: 6px; flex-wrap: wrap; }
++.rec-head b { color: #d4d4d4; font-weight: 600; }
++.rec pre { background: #17181b; border-radius: 4px; padding: 6px 8px; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow-y: auto; font-size: 12px; margin: 4px 0; }
++.rec .lbl { color: #7f848e; font-size: 11px; }
++#records-pager { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-top: 1px solid #2a2b30; color: #9a9b9f; font-size: 12px; }
++#records-pager button { padding: 3px 10px; }
++#records-pager button:disabled { opacity: .4; }
+```
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add -A && git commit -m "renderer: records tab (pagination/refresh) + live recordRounds toggle (spec §3)"
+```
