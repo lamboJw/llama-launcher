@@ -155,7 +155,7 @@ export class LauncherProxy {
       return;
     }
     const model = this.extractModel(body);
-    if (model !== null) {
+    if (model !== null && this.form.autoSwitch) {
       const current = ctrl.currentModel();
       const sameRaw = current !== null && model.toLowerCase() === current.toLowerCase();
       if (!sameRaw) {
@@ -263,7 +263,13 @@ export class LauncherProxy {
   private respondModels(res: http.ServerResponse): void {
     const ctrl = this.opts.controller;
     const current = ctrl.currentModel();
-    const data = ctrl.union().map((m) => ({
+    // 自动切换关闭时只暴露当前模型（请求 model 字段被忽略，规格 §5）
+    const list = this.form.autoSwitch
+      ? ctrl.union()
+      : current !== null
+        ? [{ name: current, source: 'local' as const }]
+        : [];
+    const data = list.map((m) => ({
       id: m.name,
       object: 'model',
       owned_by: 'llama-launcher',

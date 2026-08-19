@@ -9,6 +9,7 @@
     "outDir": "dist",
     "rootDir": "src"
   },
+  "exclude": [],
   "include": [
     "src/preload"
   ]

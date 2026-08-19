@@ -140,6 +140,7 @@ describe('LauncherProxy', () => {
   });
 
   beforeEach(() => {
+    proxy.setForm({ ...DEFAULT_FORM, autoSwitch: true });
     ctrl.port = backendPort;
     ctrl.ready = true;
     ctrl._switching = false;
@@ -373,5 +374,27 @@ describe('LauncherProxy', () => {
     expect(computeCacheHitRate({ prompt_tokens: 0, prompt_tokens_details: { cached_tokens: 5 } })).toBeNull();
     expect(computeCacheHitRate({ prompt_tokens: 10 })).toBeNull();
     expect(computeCacheHitRate({ prompt_tokens: 10, prompt_tokens_details: { cached_tokens: 3 } })).toBeCloseTo(0.3);
+  });
+
+  it('autoSwitch off ignores the model field (no switch, no 400)', async () => {
+    proxy.setForm({ ...DEFAULT_FORM, autoSwitch: false });
+    const res = await postJson(proxyPort, '/v1/chat/completions', {
+      model: 'nope-model',
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: true,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('"content":"hel"');
+    expect(ctrl.switchCalls).toEqual([]);
+  });
+
+  it('autoSwitch off: /v1/models lists only the current model', async () => {
+    proxy.setForm({ ...DEFAULT_FORM, autoSwitch: false });
+    const res = await doGet(proxyPort, '/v1/models');
+    expect(res.status).toBe(200);
+    const obj = JSON.parse(res.body) as { data: { id: string; current: boolean }[] };
+    expect(obj.data).toHaveLength(1);
+    expect(obj.data[0].id).toBe('fake-model');
+    expect(obj.data[0].current).toBe(true);
   });
 });
