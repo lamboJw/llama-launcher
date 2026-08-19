@@ -52,10 +52,29 @@
         <div id="log-view"></div>
       </div>
       <div id="tab-stats" class="tab hidden">
-        <div class="placeholder">统计面板（Task 16）</div>
+        <div id="stat-cards">
+          <div class="card"><div class="card-label">首 token 时间</div><div class="card-value" id="st-ttft">-</div></div>
+          <div class="card"><div class="card-label">prefill 速度</div><div class="card-value" id="st-ptps">-</div></div>
+          <div class="card"><div class="card-label">decode 速度</div><div class="card-value" id="st-dtps">-</div></div>
+          <div class="card"><div class="card-label">prefill 时间</div><div class="card-value" id="st-pms">-</div></div>
+          <div class="card"><div class="card-label">缓存命中率</div><div class="card-value" id="st-cache">-</div></div>
+        </div>
+        <div class="table-wrap">
+          <table id="stat-table">
+            <thead><tr><th>时间</th><th>模型</th><th>TTFT</th><th>prefill</th><th>prefill 速度</th><th>decode 速度</th><th>缓存命中率</th></tr></thead>
+            <tbody id="stat-tbody"></tbody>
+          </table>
+        </div>
       </div>
       <div id="tab-chat" class="tab hidden">
-        <div class="placeholder">内置测试聊天（Task 16）</div>
+        <div id="chat-msgs"><div class="chat-bubble sys">服务器运行中时，消息发送到可见端口的 /v1/chat/completions（SSE 流式）</div></div>
+        <div id="chat-input">
+          <textarea id="chat-text" rows="2" placeholder="发送消息…（Ctrl+Enter 发送）"></textarea>
+          <div class="row">
+            <button id="chat-send">发送</button>
+            <button id="chat-clear" class="stop">清空</button>
+          </div>
+        </div>
       </div>
       <div id="tab-records" class="tab hidden">
         <div class="placeholder">轮次记录（Task 17）</div>

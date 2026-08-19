@@ -1,6 +1,6 @@
 // renderer/main.ts — 主 UI（规格 §3：顶栏 / 左栏设置 / 右栏 tabs）；Task 16-17 填充统计/聊天/轮次记录
 import { ansiHtml } from './ansi.js';
-import type { FormValues, ModelRef, ServerState, Profile, UpdateProgress, InstalledVersion } from '../shared/types.js';
+import type { FormValues, ModelRef, ServerState, Profile, RoundStats, UpdateProgress, InstalledVersion } from '../shared/types.js';
 
 interface BootState {
   appRoot: string;
@@ -9,6 +9,7 @@ interface BootState {
   union: ModelRef[];
   installed: InstalledVersion[];
   banner: { version: string | null; update: string | null };
+  stats: { latest: RoundStats | null; history: RoundStats[] };
 }
 
 interface ExitInfo { code: number | null; early: boolean; stderr: string; intentional: boolean }
@@ -125,6 +126,7 @@ let form: FormValues | null = null;
 let union: ModelRef[] = [];
 let installed: InstalledVersion[] = [];
 let latestTag: string | null = null;
+let serverState: ServerState = { status: 'stopped', port: null, model: null, exitCode: null };
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -352,6 +354,7 @@ const STATUS_UI: Record<ServerState['status'], [string, string]> = {
 };
 
 function renderState(s: ServerState): void {
+  serverState = s;
   const [text, color] = STATUS_UI[s.status];
   const badge = $<HTMLSpanElement>('status-badge');
   badge.textContent = s.status === 'crashed' && s.exitCode !== null ? `${text} (exit ${s.exitCode})` : text;
@@ -432,11 +435,117 @@ async function doCheckUpdate(): Promise<void> {
   }
 }
 
+// ---------- 统计（规格 §7：5 卡片 + 最近 20 行） ----------
+const fmtMs = (v: number | null): string => (v === null ? '-' : v < 1000 ? `${v.toFixed(0)} ms` : `${(v / 1000).toFixed(2)} s`);
+const fmtTps = (v: number | null): string => (v === null ? '-' : `${v.toFixed(1)} tok/s`);
+const fmtPct = (v: number | null): string => (v === null ? '-' : `${(v * 100).toFixed(1)} %`);
+
+function renderStats(latest: RoundStats | null, history: RoundStats[]): void {
+  const set = (id: string, v: string): void => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  set('st-ttft', fmtMs(latest?.ttftMs ?? null));
+  set('st-ptps', fmtTps(latest?.prefillTps ?? null));
+  set('st-dtps', fmtTps(latest?.decodeTps ?? null));
+  set('st-pms', fmtMs(latest?.prefillMs ?? null));
+  set('st-cache', fmtPct(latest?.cacheHitRate ?? null));
+  const tbody = document.getElementById('stat-tbody');
+  if (!tbody) return;
+  tbody.textContent = '';
+  for (const r of [...history].slice(-20).reverse()) {
+    const tr = document.createElement('tr');
+    const cells = [
+      new Date(r.ts).toLocaleTimeString(),
+      r.model ?? '',
+      fmtMs(r.ttftMs),
+      fmtMs(r.prefillMs),
+      fmtTps(r.prefillTps),
+      fmtTps(r.decodeTps),
+      fmtPct(r.cacheHitRate),
+    ];
+    for (const c of cells) { const td = document.createElement('td'); td.textContent = c; tr.appendChild(td); }
+    tbody.appendChild(tr);
+  }
+}
+
+// ---------- 聊天（走可见端口代理，规格 §3） ----------
+const chatHistory: { role: 'user' | 'assistant'; content: string }[] = [];
+
+function chatBubble(role: 'user' | 'assistant' | 'sys', text: string): HTMLElement {
+  const d = document.createElement('div');
+  d.className = `chat-bubble ${role}`;
+  d.textContent = text;
+  const host = $<HTMLDivElement>('chat-msgs');
+  host.appendChild(d);
+  host.scrollTop = host.scrollHeight;
+  return d;
+}
+
+async function chatSend(): Promise<void> {
+  const ta = $<HTMLTextAreaElement>('chat-text');
+  const text = ta.value.trim();
+  if (text === '') return;
+  if (!form) return;
+  if (serverState.status !== 'running') { chatBubble('sys', '服务器未运行（先点启动）'); return; }
+  ta.value = '';
+  chatHistory.push({ role: 'user', content: text });
+  chatBubble('user', text);
+  const bubble = chatBubble('assistant', '…');
+  try {
+    const headers: Record<string, string> = { 'content-type': 'application/json' };
+    if (form.apiKey !== '') headers['authorization'] = `Bearer ${form.apiKey}`;
+    const resp = await fetch(`http://${form.proxyHost}:${form.visiblePort}/v1/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ model: modelSelect.value, messages: chatHistory, stream: true }),
+    });
+    if (!resp.ok || !resp.body) {
+      bubble.textContent = `请求失败（HTTP ${resp.status}）：${await resp.text()}`;
+      chatHistory.pop();
+      return;
+    }
+    let acc = '';
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx: number;
+      while ((idx = buf.indexOf('\n\n')) !== -1) {
+        const raw = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        const dataLine = raw.split('\n').find((l) => l.startsWith('data:'));
+        if (!dataLine) continue;
+        const data = dataLine.slice(5).replace(/^ /, '');
+        if (data === '[DONE]') continue;
+        try {
+          const obj = JSON.parse(data) as { choices?: { delta?: { content?: unknown } }[] };
+          const c = obj.choices?.[0]?.delta?.content;
+          if (typeof c === 'string') { acc += c; bubble.textContent = acc; };
+        } catch { /* 非 JSON 块跳过 */ }
+      }
+    }
+    if (acc === '') bubble.textContent = '（空响应）';
+    chatHistory.push({ role: 'assistant', content: acc });
+  } catch (e) {
+    bubble.textContent = `网络错误: ${String(e)}`;
+    chatHistory.pop();
+  }
+}
+
 // ---------- 事件订阅 ----------
 function subscribeEvents(): void {
   window.llama.on('state:change', (p) => renderState(p as ServerState));
   window.llama.on('log:lines', (p) => appendLog(p as string[]));
   window.llama.on('banner:change', (p) => renderBanner(p as { version: string | null; update: string | null }));
+  window.llama.on('stats:request', (p) => {
+    const s = p as { latest: RoundStats | null; history: RoundStats[] };
+    renderStats(s.latest, s.history);
+  });
+  window.llama.on('stats:round', (p) => {
+    const s = p as { latest: RoundStats | null; history: RoundStats[] };
+    renderStats(s.latest, s.history);
+  });
   window.llama.on('update:progress', (p) => {
     const u = p as UpdateProgress;
     const prog = $<HTMLProgressElement>('update-progress');
@@ -477,6 +586,14 @@ function wireButtons(): void {
   });
   $<HTMLButtonElement>('btn-log-clear').addEventListener('click', () => {
     $<HTMLDivElement>('log-view').textContent = '';
+  });
+  $<HTMLButtonElement>('chat-send').addEventListener('click', () => void chatSend());
+  $<HTMLButtonElement>('chat-clear').addEventListener('click', () => {
+    chatHistory.length = 0;
+    $<HTMLDivElement>('chat-msgs').textContent = '';
+  });
+  $<HTMLTextAreaElement>('chat-text').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.ctrlKey) void chatSend();
   });
   const tabs = document.querySelectorAll('#tabs button');
   for (const t of Array.from(tabs)) {
@@ -540,6 +657,7 @@ async function main(): Promise<void> {
   buildModelSelect(s.server.model);
   renderState(s.server);
   renderBanner(s.banner);
+  renderStats(s.stats.latest, s.stats.history);
   await refreshProfiles();
   subscribeEvents();
 }

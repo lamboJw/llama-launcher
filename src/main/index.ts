@@ -38,7 +38,15 @@ const ctl = new ServerController(pm, {
     if (ev) {
       const ts = Date.now();
       if (ev.kind === 'prompt') rounds.onPrompt(ev, ts);
-      else rounds.onEval(ev, ts);
+      else {
+        rounds.onEval(ev, ts);
+        // 轮次完成（prefill + decode 配对）→ 入库并推送（规格 §7）
+        const r = rounds.rounds[rounds.rounds.length - 1];
+        if (r && r.prefillMs !== null) {
+          stats.addRound(r);
+          send('stats:round', { latest: stats.getLatest(), history: stats.getHistory().slice(-20) });
+        }
+      }
     }
   },
   onExit: (info) => send('exit:crash', info),
