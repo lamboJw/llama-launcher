@@ -3454,3 +3454,837 @@ export class LauncherProxy {
 ```bash
 cd /f/llama_lanucher && npm run typecheck && git add -A && git -c user.name='dsh' -c user.email='dsh@local' commit -m "proxy: reverse proxy + SSE passthrough/TTFT/usage + CORS + auto-switch queueing"
 ```
+
+---
+
+### Task 13: updater.ts — GitHub 更新检查与自动下载（续传/修剪/验证）
+
+**Files:**
+- Create: `src/main/updater.ts`, `test/updater.test.ts`
+- Modify: `src/shared/types.ts`（InstalledVersion 加 `valid?`）、`tsconfig.json`（esModuleInterop）
+- Deps: `npm i adm-zip`、`npm i -D @types/adm-zip`
+
+规格 §9.2：检查 `releases/latest`（网络失败返回 null 不阻塞）；资产匹配优先
+`llama-b<NNNN>-bin-win-cuda-13.*-x64.zip`，无 13.x 回退最高 CUDA 版本；CUDA DLLs 取同版本
+`cudart-llama-bin-win-cuda-<ver>-x64.zip`，`cuda/cuda-<ver>/cudart64_<主版本>.dll` 已存在则跳过；
+下载 `.part` + HTTP Range 断点续传（服务器忽略 Range → 从头重下，失败保留 .part）；
+磁盘预检 ≥2GB；解压失败删不完整版本目录；验证跑 `<tag>/llama-server(.exe) --version`
+（失败标 `valid:false` 标红、不自动选中）；修剪最多保留 2 个版本目录（删最旧、最旧为选中时改删中间）、
+顺带清理无版本引用的 `cuda/` 目录；更新 manifest.json（JSON 数组，独立读写——JsonStore 的
+spread 语义不适配数组）。测试替身：本地 HTTP 服务器（支持 Range）+ adm-zip 夹具，不依赖 GitHub 网络。
+
+- [ ] **Step 1: 安装依赖 + 小改动**
+
+```bash
+cd /f/llama_lanucher && npm install adm-zip && npm install -D @types/adm-zip
+```
+
+`tsconfig.json` 加 `"esModuleInterop": true`；`src/shared/types.ts` 的 `InstalledVersion` 加 `valid?: boolean`。
+
+- [ ] **Step 2: 写失败测试 test/updater.test.ts**
+
+```ts
+// updater.test.ts — llama.cpp 更新检查与自动下载（规格 §9.2）
+// 本地 HTTP 服务器（支持 Range）+ adm-zip 夹具；不依赖 GitHub 网络
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import http from 'node:http';
+import { mkdtemp, rm, readFile, writeFile, mkdir, stat, readdir } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import AdmZip from 'adm-zip';
+import {
+  pickMainAsset,
+  pickCudaAsset,
+  checkDiskSpace,
+  downloadFile,
+  extractZip,
+  pruneVersions,
+  readManifest,
+  writeManifest,
+  checkLatestRelease,
+  runUpdate,
+  type ReleaseAsset,
+} from '../src/main/updater.js';
+import type { InstalledVersion } from '../shared/types.js';
+
+const A = (name: string, url?: string): ReleaseAsset => ({
+  name,
+  browser_download_url: url ?? `http://127.0.0.1:1/${name}`,
+});
+
+const ASSETS_10488: ReleaseAsset[] = [
+  A('llama-b10488-bin-win-cuda-13.3-x64.zip'),
+  A('llama-b10488-bin-win-cuda-12.9-x64.zip'),
+  A('llama-b10488-bin-win-cpu-avx2-x64.zip'),
+  A('cudart-llama-bin-win-cuda-13.3-x64.zip'),
+  A('cudart-llama-bin-win-cuda-12.9-x64.zip'),
+];
+
+const listen = (server: http.Server): Promise<number> =>
+  new Promise((resolve) =>
+    server.listen(0, '127.0.0.1', () => resolve((server.address() as { port: number }).port)),
+  );
+
+const closeServer = (server: http.Server): Promise<void> =>
+  new Promise((resolve) => server.close(() => resolve()));
+
+describe('pickMainAsset', () => {
+  it('prefers the matching-build win-cuda-13.x asset', () => {
+    const r = pickMainAsset('b10488', ASSETS_10488);
+    expect(r).not.toBeNull();
+    expect(r!.asset.name).toBe('llama-b10488-bin-win-cuda-13.3-x64.zip');
+    expect(r!.cudaVersion).toBe('13.3');
+    expect(r!.fellBack).toBe(false);
+  });
+
+  it('falls back to the highest CUDA version when no 13.x asset exists', () => {
+    const r = pickMainAsset('b9999', [
+      A('llama-b9999-bin-win-cuda-12.4-x64.zip'),
+      A('llama-b9999-bin-win-cuda-11.8-x64.zip'),
+    ]);
+    expect(r!.asset.name).toBe('llama-b9999-bin-win-cuda-12.4-x64.zip');
+    expect(r!.cudaVersion).toBe('12.4');
+    expect(r!.fellBack).toBe(true);
+  });
+
+  it('returns null when no Windows asset matches the tag', () => {
+    expect(pickMainAsset('b10488', [A('llama-b10487-bin-win-cuda-13.3-x64.zip')])).toBeNull();
+    expect(pickMainAsset('b10488', [])).toBeNull();
+  });
+});
+
+describe('pickCudaAsset', () => {
+  it('matches the CUDA DLL package of the same version as the main package', () => {
+    expect(pickCudaAsset('13.3', ASSETS_10488)!.name).toBe('cudart-llama-bin-win-cuda-13.3-x64.zip');
+    expect(pickCudaAsset('14.0', ASSETS_10488)).toBeNull();
+  });
+});
+
+describe('checkDiskSpace', () => {
+  it('reports ok when free space is sufficient and not ok when it is not', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'upd-disk-'));
+    try {
+      const ok = await checkDiskSpace(dir, 1024 * 1024);
+      expect(ok.ok).toBe(true);
+      expect(ok.freeBytes).toBeGreaterThan(1024 * 1024);
+      const bad = await checkDiskSpace(dir, Number.MAX_SAFE_INTEGER);
+      expect(bad.ok).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('downloadFile', () => {
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(path.join(os.tmpdir(), 'upd-dl-'));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const rangeServer = (buf: Buffer, info: { range: number }): http.Server =>
+    http.createServer((req, res) => {
+      const range = req.headers['range'];
+      if (range) {
+        info.range++;
+        const start = Number(String(range).match(/bytes=(\d+)-/)![1]);
+        res.writeHead(206, {
+          'content-range': `bytes ${start}-${buf.length - 1}/${buf.length}`,
+          'content-length': String(buf.length - start),
+        });
+        res.end(buf.subarray(start));
+      } else {
+        res.writeHead(200, { 'content-length': String(buf.length) });
+        res.end(buf);
+      }
+    });
+
+  it('downloads a complete file and reports progress', async () => {
+    const buf = Buffer.from('0123456789'.repeat(100)); // 1000 bytes
+    const server = rangeServer(buf, { range: 0 });
+    const port = await listen(server);
+    const dest = path.join(dir, 'a.bin');
+    let last = { received: 0, total: 0, pct: -1, mbps: 0 };
+    await downloadFile({ url: `http://127.0.0.1:${port}/a.bin`, dest, onProgress: (p) => (last = p) });
+    expect(await readFile(dest)).toEqual(buf);
+    expect(last.received).toBe(buf.length);
+    expect(last.total).toBe(buf.length);
+    expect(last.pct).toBe(1);
+    await closeServer(server);
+  });
+
+  it('resumes an interrupted download via a Range request', async () => {
+    const buf = Buffer.from('abcdefghij'.repeat(50)); // 500 bytes
+    const info = { range: 0 };
+    const server = rangeServer(buf, info);
+    const port = await listen(server);
+    const dest = path.join(dir, 'b.bin');
+    await writeFile(dest + '.part', buf.subarray(0, 120)); // 模拟已下载 120 字节
+    await downloadFile({ url: `http://127.0.0.1:${port}/b.bin`, dest });
+    expect(info.range).toBe(1);
+    expect(await readFile(dest)).toEqual(buf);
+    await closeServer(server);
+  });
+
+  it('re-downloads from the start when the server ignores Range', async () => {
+    const buf = Buffer.from('xyzxyzxyzxyz');
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-length': String(buf.length) });
+      res.end(buf);
+    });
+    const port = await listen(server);
+    const dest = path.join(dir, 'c.bin');
+    await writeFile(dest + '.part', Buffer.from('stale'));
+    await downloadFile({ url: `http://127.0.0.1:${port}/c.bin`, dest });
+    expect(await readFile(dest)).toEqual(buf);
+    await closeServer(server);
+  });
+
+  it('keeps .part on failure (retryable) and throws with the HTTP status', async () => {
+    const server = http.createServer((_req, res) => { res.writeHead(500); res.end(); });
+    const port = await listen(server);
+    const dest = path.join(dir, 'd.bin');
+    await expect(downloadFile({ url: `http://127.0.0.1:${port}/d.bin`, dest })).rejects.toThrow('HTTP 500');
+    await expect(stat(dest + '.part')).resolves.toBeTruthy();
+    await closeServer(server);
+  });
+});
+
+describe('extractZip', () => {
+  it('extracts nested entries into the destination directory', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'upd-zip-'));
+    try {
+      const zip = new AdmZip();
+      zip.addFile('llama-server', Buffer.from('fake-exe'));
+      zip.addFile('sub/readme.txt', Buffer.from('hello'));
+      const zipPath = path.join(dir, 'm.zip');
+      zip.writeZip(zipPath);
+      const outDir = path.join(dir, 'out');
+      await extractZip(zipPath, outDir);
+      expect(await readFile(path.join(outDir, 'llama-server'))).toEqual(Buffer.from('fake-exe'));
+      expect(await readFile(path.join(outDir, 'sub/readme.txt'))).toEqual(Buffer.from('hello'));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('pruneVersions', () => {
+  it('keeps the newest versions and removes unreferenced cuda directories', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'upd-prune-'));
+    try {
+      const t0 = Date.now() - 4000;
+      for (const tag of ['b1', 'b2', 'b3']) await mkdir(path.join(dir, tag), { recursive: true });
+      await mkdir(path.join(dir, 'cuda', 'cuda-12.9'), { recursive: true });
+      await mkdir(path.join(dir, 'cuda', 'cuda-13.3'), { recursive: true });
+      const entries: InstalledVersion[] = [
+        { tag: 'b1', cudaVersion: '12.9', installedAt: t0 },
+        { tag: 'b2', cudaVersion: '13.3', installedAt: t0 + 1 },
+        { tag: 'b3', cudaVersion: '13.3', installedAt: t0 + 2 },
+      ];
+      const r = await pruneVersions(dir, entries, null, 2);
+      expect(r.prunedTags).toEqual(['b1']);
+      expect(r.prunedCuda).toEqual(['cuda-12.9']);
+      await expect(stat(path.join(dir, 'b1'))).rejects.toThrow();
+      await expect(stat(path.join(dir, 'b2'))).resolves.toBeTruthy();
+      await expect(stat(path.join(dir, 'cuda', 'cuda-13.3'))).resolves.toBeTruthy();
+      await expect(stat(path.join(dir, 'cuda', 'cuda-12.9'))).rejects.toThrow();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips the selected version when pruning (removes the middle one instead)", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'upd-prune2-'));
+    try {
+      const t0 = Date.now() - 4000;
+      for (const tag of ['b1', 'b2', 'b3', 'b4']) await mkdir(path.join(dir, tag), { recursive: true });
+      const entries: InstalledVersion[] = (['b1', 'b2', 'b3', 'b4'] as const).map((tag, i) => ({
+        tag,
+        cudaVersion: i === 3 ? '13.3' : '12.9',
+        installedAt: t0 + i,
+      }));
+      const r = await pruneVersions(dir, entries, 'b1', 2);
+      expect(r.prunedTags).toEqual(['b2', 'b3']);
+      await expect(stat(path.join(dir, 'b1'))).resolves.toBeTruthy();
+      await expect(stat(path.join(dir, 'b4'))).resolves.toBeTruthy();
+      await expect(stat(path.join(dir, 'b2'))).rejects.toThrow();
+      await expect(stat(path.join(dir, 'b3'))).rejects.toThrow();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('checkLatestRelease', () => {
+  it('parses the latest release from the API', async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        tag_name: 'b10500',
+        assets: [{ name: 'llama-b10500-bin-win-cuda-13.3-x64.zip', browser_download_url: 'http://x/y.zip' }],
+      }));
+    });
+    const port = await listen(server);
+    const info = await checkLatestRelease(`http://127.0.0.1:${port}/releases/latest`);
+    expect(info).not.toBeNull();
+    expect(info!.tag_name).toBe('b10500');
+    expect(info!.assets).toHaveLength(1);
+    await closeServer(server);
+  });
+
+  it('returns null on network failure or non-200', async () => {
+    expect(await checkLatestRelease('http://127.0.0.1:1/none', 500)).toBeNull();
+    const server = http.createServer((_req, res) => { res.writeHead(500); res.end(); });
+    const port = await listen(server);
+    expect(await checkLatestRelease(`http://127.0.0.1:${port}/releases/latest`)).toBeNull();
+    await closeServer(server);
+  });
+});
+
+describe('runUpdate', () => {
+  function makeFixtures(): { mainBuf: Buffer; cudaBuf: Buffer } {
+    const main = new AdmZip();
+    main.addFile('llama-server', Buffer.from('new-exe-linux'));
+    main.addFile('llama-server.exe', Buffer.from('new-exe-win'));
+    const cuda = new AdmZip();
+    cuda.addFile('cudart64_13.dll', Buffer.from('cuda-dll-bytes'));
+    return { mainBuf: Buffer.from(main.toBuffer()), cudaBuf: Buffer.from(cuda.toBuffer()) };
+  }
+
+  const serveFiles = (files: Record<string, Buffer>, hits: Record<string, number>): Promise<{ port: number; server: http.Server }> =>
+    new Promise((resolve) => {
+      const server = http.createServer((req, res) => {
+        const name = (req.url ?? '').split('/').pop() ?? '';
+        const buf = files[name];
+        if (!buf) { res.writeHead(404); res.end(); return; }
+        hits[name] = (hits[name] ?? 0) + 1;
+        res.writeHead(200, { 'content-length': String(buf.length) });
+        res.end(buf);
+      });
+      server.listen(0, '127.0.0.1', () => resolve({ port: (server.address() as { port: number }).port, server }));
+    });
+
+  const exeName = (): string => (process.platform === 'win32' ? 'llama-server.exe' : 'llama-server');
+  const withUrls = (port: number): ReleaseAsset[] =>
+    ASSETS_10488.map((a) => ({ ...a, browser_download_url: `http://127.0.0.1:${port}/${a.name}` }));
+
+  it('refuses without downloading when the disk precheck fails', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'upd-run-'));
+    try {
+      const res = await runUpdate({
+        baseDir: dir,
+        tag: 'b10488',
+        assets: ASSETS_10488,
+        selectedTag: null,
+        minFreeBytes: Number.MAX_SAFE_INTEGER,
+        verify: async () => {},
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error ?? '').toMatch(/磁盘空间不足/);
+      const entries = await readdir(dir);
+      expect(entries.filter((f) => f.endsWith('.zip') || f.endsWith('.part'))).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('downloads, extracts, reuses CUDA, prunes, and updates the manifest', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'upd-run-'));
+    try {
+      const { mainBuf, cudaBuf } = makeFixtures();
+      const hits: Record<string, number> = {};
+      const { port, server } = await serveFiles({
+        'llama-b10488-bin-win-cuda-13.3-x64.zip': mainBuf,
+        'cudart-llama-bin-win-cuda-13.3-x64.zip': cudaBuf,
+      }, hits);
+      // 预置：两个旧版本 + 已存在的 CUDA 目录（应复用，不重下）
+      const t0 = Date.now() - 9000;
+      await mkdir(path.join(dir, 'b8000'), { recursive: true });
+      await mkdir(path.join(dir, 'b9000'), { recursive: true });
+      await mkdir(path.join(dir, 'cuda', 'cuda-13.3'), { recursive: true });
+      await writeFile(path.join(dir, 'cuda', 'cuda-13.3', 'cudart64_13.dll'), Buffer.from('old-dll'));
+      await writeManifest(dir, [
+        { tag: 'b8000', cudaVersion: '13.3', installedAt: t0 },
+        { tag: 'b9000', cudaVersion: '13.3', installedAt: t0 + 1000 },
+      ]);
+      const phases: string[] = [];
+      const res = await runUpdate({
+        baseDir: dir,
+        tag: 'b10488',
+        assets: withUrls(port),
+        selectedTag: 'b9000',
+        minFreeBytes: 1024 * 1024,
+        verify: async (exePath) => { const s = await stat(exePath); if (s.size <= 0) throw new Error('empty exe'); },
+        onProgress: (p) => phases.push(p.phase),
+      });
+      expect(res.ok).toBe(true);
+      expect(res.valid).toBe(true);
+      expect(res.cudaVersion).toBe('13.3');
+      expect(res.mainFellBack).toBe(false);
+      // 主包解压、zip 删除
+      expect(await readFile(path.join(dir, 'b10488', exeName()))).toEqual(
+        process.platform === 'win32' ? Buffer.from('new-exe-win') : Buffer.from('new-exe-linux'),
+      );
+      const leftovers = await readdir(dir);
+      expect(leftovers.some((f) => f.endsWith('.zip') || f.endsWith('.part'))).toBe(false);
+      // CUDA 复用：未下载 cudart
+      expect(hits['cudart-llama-bin-win-cuda-13.3-x64.zip'] ?? 0).toBe(0);
+      expect(phases).not.toContain('download-cuda');
+      expect(phases).toContain('download-main');
+      expect(phases).toContain('done');
+      // 修剪：3 个版本 → 保留 2 个，删最旧 b8000（b9000 选中但非最旧）
+      const manifest = await readManifest(dir);
+      expect(manifest.map((e) => e.tag).sort()).toEqual(['b10488', 'b9000']);
+      await expect(stat(path.join(dir, 'b8000'))).rejects.toThrow();
+      const entry = manifest.find((e) => e.tag === 'b10488');
+      expect(entry!.cudaVersion).toBe('13.3');
+      expect(entry!.valid).toBe(true);
+      await closeServer(server);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('marks the version invalid when verification fails', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'upd-run-'));
+    try {
+      const { mainBuf, cudaBuf } = makeFixtures();
+      const hits: Record<string, number> = {};
+      const { port, server } = await serveFiles({
+        'llama-b10488-bin-win-cuda-13.3-x64.zip': mainBuf,
+        'cudart-llama-bin-win-cuda-13.3-x64.zip': cudaBuf,
+      }, hits);
+      const res = await runUpdate({
+        baseDir: dir,
+        tag: 'b10488',
+        assets: withUrls(port),
+        selectedTag: null,
+        minFreeBytes: 1024 * 1024,
+        verify: async () => { throw new Error('bad exe'); },
+      });
+      expect(res.ok).toBe(true);
+      expect(res.valid).toBe(false);
+      const manifest = await readManifest(dir);
+      expect(manifest.find((e) => e.tag === 'b10488')!.valid).toBe(false);
+      // 无已存在 CUDA 目录 → 应下载 CUDA 包
+      expect(hits['cudart-llama-bin-win-cuda-13.3-x64.zip'] ?? 0).toBe(1);
+      await closeServer(server);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+```
+
+- [ ] **Step 3: 运行测试确认失败**
+
+运行：`cd /f/llama_lanucher && npx vitest run test/updater.test.ts`
+预期：失败，`Cannot find module '../src/main/updater.js'`。
+
+- [ ] **Step 4: 写 src/main/updater.ts**
+
+```ts
+// updater.ts — llama.cpp 版本更新（规格 §9.2）：GitHub 检查 + 自动下载
+// 纯 Node（无 electron 依赖）；测试用本地 HTTP 服务器 + adm-zip 夹具
+import http from 'node:http';
+import https from 'node:https';
+import { execFile } from 'node:child_process';
+import fs from 'node:fs/promises';
+import { existsSync, createWriteStream } from 'node:fs';
+import path from 'node:path';
+import AdmZip from 'adm-zip';
+import { parseVersion } from './version.js';
+import type { InstalledVersion, UpdateProgress } from '../shared/types.js';
+
+export const GITHUB_LATEST_URL = 'https://api.github.com/repos/ggml-org/llama.cpp/releases/latest';
+export const MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024; // 2GB（zip + 解压峰值）
+
+export interface ReleaseAsset { name: string; browser_download_url: string; size?: number }
+export interface ReleaseInfo { tag_name: string; assets: ReleaseAsset[] }
+
+// ---------- 资产匹配（规格 §9.2：b10488 实测命名） ----------
+const MAIN_RE = /^llama-b(\d+)-bin-win-cuda-(\d+\.\d+)-x64\.zip$/;
+
+function cmpVer(a: string, b: string): number {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+/** 主包：优先 win-cuda-13.*；无 13.x 时回退最高 CUDA 版本 */
+export function pickMainAsset(
+  tag: string,
+  assets: ReleaseAsset[],
+): { asset: ReleaseAsset; cudaVersion: string; fellBack: boolean } | null {
+  const tagNum = tag.match(/b(\d+)/)?.[1];
+  const matches: { asset: ReleaseAsset; cudaVersion: string }[] = [];
+  for (const a of assets) {
+    const m = a.name.match(MAIN_RE);
+    if (!m) continue;
+    if (tagNum && m[1] !== tagNum) continue;
+    matches.push({ asset: a, cudaVersion: m[2] });
+  }
+  if (matches.length === 0) return null;
+  const v13 = matches
+    .filter((x) => x.cudaVersion.startsWith('13.'))
+    .sort((a, b) => cmpVer(b.cudaVersion, a.cudaVersion));
+  if (v13.length > 0) return { asset: v13[0].asset, cudaVersion: v13[0].cudaVersion, fellBack: false };
+  const best = [...matches].sort((a, b) => cmpVer(b.cudaVersion, a.cudaVersion))[0];
+  return { asset: best.asset, cudaVersion: best.cudaVersion, fellBack: true };
+}
+
+/** CUDA DLL 包：与主包同 CUDA 版本 */
+export function pickCudaAsset(cudaVersion: string, assets: ReleaseAsset[]): ReleaseAsset | null {
+  const re = new RegExp(`^cudart-llama-bin-win-cuda-${cudaVersion.replace(/\./g, '\\.')}-x64\\.zip$`);
+  return assets.find((a) => re.test(a.name)) ?? null;
+}
+
+// ---------- 检查最新版 ----------
+async function httpGetText(url: string, timeoutMs: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const lib = u.protocol === 'https:' ? https : http;
+    const req = lib.get(
+      {
+        protocol: u.protocol,
+        host: u.hostname,
+        port: u.port || (u.protocol === 'https:' ? 443 : 80),
+        path: u.pathname + u.search,
+        agent: false,
+      },
+      (res) => {
+        if (res.statusCode !== 200) {
+          res.resume();
+          reject(new Error(`HTTP ${res.statusCode}`));
+          return;
+        }
+        const chunks: Buffer[] = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+      },
+    );
+    req.on('error', reject);
+    req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error('timeout')); });
+  });
+}
+
+/** 拉取最新 release；网络失败 / 非 200 → null（不阻塞任何功能） */
+export async function checkLatestRelease(url: string = GITHUB_LATEST_URL, timeoutMs = 10000): Promise<ReleaseInfo | null> {
+  try {
+    const body = await httpGetText(url, timeoutMs);
+    const info = JSON.parse(body) as ReleaseInfo;
+    if (typeof info.tag_name !== 'string' || !Array.isArray(info.assets)) return null;
+    return info;
+  } catch {
+    return null;
+  }
+}
+
+// ---------- 磁盘预检 ----------
+export async function checkDiskSpace(dir: string, requiredBytes: number): Promise<{ ok: boolean; freeBytes: number }> {
+  const st = await fs.statfs(dir);
+  const freeBytes = st.bavail * st.bsize;
+  return { ok: freeBytes >= requiredBytes, freeBytes };
+}
+
+// ---------- 下载（.part + HTTP Range 断点续传） ----------
+export interface DownloadProgress { received: number; total: number; pct: number; mbps: number }
+export interface DownloadOptions {
+  url: string;
+  dest: string;
+  partFile?: string;
+  onProgress?: (p: DownloadProgress) => void;
+}
+
+class RangeUnsupportedError extends Error {}
+
+async function downloadOnce(
+  url: string,
+  part: string,
+  offset: number,
+  onProgress?: (p: DownloadProgress) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const lib = u.protocol === 'https:' ? https : http;
+    const fl = createWriteStream(part, { flags: offset > 0 ? 'a' : 'w' });
+    let received = 0;
+    let total = 0;
+    const startedAt = Date.now();
+    const report = () => {
+      const secs = Math.max((Date.now() - startedAt) / 1000, 0.001);
+      const mbps = received / 1048576 / secs;
+      const pct = total > 0 ? Math.min(1, (offset + received) / total) : -1;
+      onProgress?.({ received: offset + received, total, pct, mbps });
+    };
+    const fail = (e: Error) => { fl.close(); reject(e); };
+    const req = lib.request(
+      {
+        protocol: u.protocol,
+        host: u.hostname,
+        port: u.port || (u.protocol === 'https:' ? 443 : 80),
+        path: u.pathname + u.search,
+        method: 'GET',
+        agent: false,
+        headers: offset > 0 ? { range: `bytes=${offset}-` } : {},
+      },
+      (res) => {
+        const code = res.statusCode ?? 0;
+        if ((code === 200 || code === 416) && offset > 0) {
+          // 服务器忽略 Range（或 .part 比远端文件还大）→ 从头重下
+          res.resume();
+          fail(new RangeUnsupportedError());
+          return;
+        }
+        if (code === 200) {
+          total = Number(res.headers['content-length'] ?? 0);
+        } else if (code === 206) {
+          const m = /\/(\d+)\s*$/.exec(String(res.headers['content-range'] ?? ''));
+          total = m ? Number(m[1]) : 0;
+        } else {
+          res.resume();
+          fail(new Error(`download failed: HTTP ${code}`));
+          return;
+        }
+        res.on('data', (c: Buffer) => { fl.write(c); received += c.length; report(); });
+        res.on('end', () => { fl.end(() => resolve()); });
+        res.on('error', (e) => fail(e));
+        fl.on('error', (e) => fail(e));
+      },
+    );
+    req.on('error', (e) => fail(e));
+    req.end();
+  });
+}
+
+/** 下载到 dest：先写 .part，完成后 rename；失败保留 .part 以便续传 */
+export async function downloadFile(opts: DownloadOptions): Promise<void> {
+  const part = opts.partFile ?? opts.dest + '.part';
+  await fs.mkdir(path.dirname(part), { recursive: true });
+  let offset = 0;
+  try { offset = (await fs.stat(part)).size; } catch { offset = 0; }
+  for (;;) {
+    try {
+      await downloadOnce(opts.url, part, offset, opts.onProgress);
+      break;
+    } catch (e) {
+      if (e instanceof RangeUnsupportedError) { offset = 0; continue; }
+      throw e;
+    }
+  }
+  await fs.rename(part, opts.dest);
+}
+
+// ---------- 解压 ----------
+/** 解压 zip 到 destDir（不存在则创建，覆盖已有） */
+export async function extractZip(zipPath: string, destDir: string): Promise<void> {
+  await fs.mkdir(destDir, { recursive: true });
+  const zip = new AdmZip(zipPath);
+  zip.extractAllTo(destDir, true);
+}
+
+// ---------- manifest ----------
+const MANIFEST_NAME = 'manifest.json';
+
+export async function readManifest(baseDir: string): Promise<InstalledVersion[]> {
+  try {
+    const raw = await fs.readFile(path.join(baseDir, MANIFEST_NAME), 'utf8');
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? (arr as InstalledVersion[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function writeManifest(baseDir: string, entries: InstalledVersion[]): Promise<void> {
+  await fs.mkdir(baseDir, { recursive: true });
+  const file = path.join(baseDir, MANIFEST_NAME);
+  const tmp = file + '.tmp';
+  await fs.writeFile(tmp, JSON.stringify(entries, null, 2), 'utf8');
+  await fs.rename(tmp, file);
+}
+
+// ---------- 修剪（最多保留 keep 个版本目录） ----------
+export interface PruneResult { prunedTags: string[]; prunedCuda: string[] }
+
+/** 删最旧（最旧是选中版本时改删中间那个）；顺带清理无版本引用的 cuda/ 目录 */
+export async function pruneVersions(
+  baseDir: string,
+  entries: InstalledVersion[],
+  selectedTag: string | null,
+  keep = 2,
+): Promise<PruneResult> {
+  const prunedTags: string[] = [];
+  const prunedCuda: string[] = [];
+  const byOld = [...entries].sort((a, b) => a.installedAt - b.installedAt || a.tag.localeCompare(b.tag));
+  while (byOld.length > keep) {
+    let victim = byOld[0];
+    if (victim.tag === selectedTag) {
+      const idx = byOld.findIndex((e) => e.tag !== selectedTag);
+      if (idx === -1) break; // 只剩选中版本
+      victim = byOld[idx];
+    }
+    byOld.splice(byOld.indexOf(victim), 1);
+    try { await fs.rm(path.join(baseDir, victim.tag), { recursive: true, force: true }); } catch { /* 目录可能不存在 */ }
+    prunedTags.push(victim.tag);
+  }
+  const remaining = new Set(byOld.map((e) => e.tag));
+  const referenced = new Set(
+    entries.filter((e) => remaining.has(e.tag)).map((e) => e.cudaVersion).filter((v): v is string => !!v),
+  );
+  const cudaDir = path.join(baseDir, 'cuda');
+  let dirs: string[] = [];
+  try { dirs = await fs.readdir(cudaDir); } catch { dirs = []; }
+  for (const d of dirs) {
+    if (!d.startsWith('cuda-')) continue;
+    if (referenced.has(d.slice('cuda-' .length))) continue;
+    try { await fs.rm(path.join(cudaDir, d), { recursive: true, force: true }); } catch { continue; }
+    prunedCuda.push(d);
+  }
+  return { prunedTags, prunedCuda };
+}
+
+// ---------- 验证 ----------
+/** 跑 <exe> --version 并解析；失败抛错 */
+export async function verifyExe(exePath: string): Promise<number> {
+  if (!existsSync(exePath)) throw new Error(`executable not found: ${exePath}`);
+  const out = await new Promise<string>((resolve, reject) => {
+    execFile(exePath, ['--version'], { timeout: 15000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) reject(new Error(`--version failed: ${stderr || err.message}`));
+      else resolve((stdout || '') + (stderr || ''));
+    });
+  });
+  const pv = parseVersion(out);
+  if (pv.build === null) throw new Error(`cannot parse version: ${out.slice(0, 200)}`);
+  return pv.build;
+}
+
+// ---------- 完整更新流程（规格 §9.2 更新流程 1-7） ----------
+export interface RunUpdateOptions {
+  baseDir: string;                 // <appRoot>/llama.cpp
+  tag: string;
+  assets: ReleaseAsset[];
+  selectedTag: string | null;      // 当前选中版本（修剪时豁免）
+  onProgress?: (p: UpdateProgress) => void;
+  minFreeBytes?: number;           // 默认 MIN_FREE_BYTES（2GB）
+  verify?: (exePath: string) => Promise<void>;
+}
+
+export interface RunUpdateResult {
+  ok: boolean;                   // 流程完成（验证失败也算完成，见 valid）
+  valid: boolean;                // 验证通过（false → UI 标红、不自动选中）
+  phase: UpdateProgress['phase'];
+  error?: string;
+  cudaVersion: string | null;
+  mainFellBack: boolean;           // 主包回退到非 13.x CUDA 版本
+}
+
+const GB = 1024 * 1024 * 1024;
+const fmtGB = (n: number) => (n / GB).toFixed(1);
+
+export async function runUpdate(opts: RunUpdateOptions): Promise<RunUpdateResult> {
+  const report = (phase: UpdateProgress['phase'], pct: number, mbps: number, message: string) =>
+    opts.onProgress?.({ phase, pct, mbps, message });
+  const fail = (phase: UpdateProgress['phase'], error: string, cudaVersion: string | null = null, mainFellBack = false): RunUpdateResult =>
+    ({ ok: false, valid: false, phase, error, cudaVersion, mainFellBack });
+  try {
+    // 1. 磁盘预检
+    const minFree = opts.minFreeBytes ?? MIN_FREE_BYTES;
+    report('check', -1, 0, '磁盘预检');
+    const disk = await checkDiskSpace(opts.baseDir, minFree);
+    if (!disk.ok) {
+      return fail('error', `磁盘空间不足：可用 ${fmtGB(disk.freeBytes)}GB，需要 ${fmtGB(minFree)}GB`);
+    }
+    // 2. 主包资产
+    const main = pickMainAsset(opts.tag, opts.assets);
+    if (!main) return fail('error', `未找到匹配的 Windows CUDA 资产（tag ${opts.tag}）`);
+    const cudaVersion = main.cudaVersion;
+    // 3. 下载主包（断点续传）
+    const mainZip = path.join(opts.baseDir, main.asset.name);
+    report('download-main', 0, 0, `下载主包 ${main.asset.name}${main.fellBack ? '（无 13.x 资产，回退最高 CUDA 版本）' : ''}`);
+    await downloadFile({
+      url: main.asset.browser_download_url,
+      dest: mainZip,
+      onProgress: (p) => report(
+        'download-main', p.pct, p.mbps,
+        `主包 ${p.pct >= 0 ? (p.pct * 100).toFixed(1) + '%' : ''} ${p.mbps.toFixed(1)}MB/s`,
+      ),
+    });
+    // 4. 解压（失败删不完整目录，旧版本不受影响）
+    const versionDir = path.join(opts.baseDir, opts.tag);
+    report('extract', -1, 0, '解压主包');
+    try {
+      await extractZip(mainZip, versionDir);
+    } catch (e) {
+      await fs.rm(versionDir, { recursive: true, force: true });
+      await fs.rm(mainZip, { force: true });
+      return fail('error', `解压失败: ${(e as Error).message}`, cudaVersion, main.fellBack);
+    }
+    await fs.rm(mainZip, { force: true });
+    // 5. CUDA DLLs（复用已有 cudart64_<主版本>.dll）
+    const cudaDir = path.join(opts.baseDir, 'cuda', `cuda-${cudaVersion}`);
+    const dllName = `cudart64_${cudaVersion.split('.')[0]}.dll`;
+    let dllOk = false;
+    try { await fs.access(path.join(cudaDir, dllName)); dllOk = true; } catch { dllOk = false; }
+    if (!dllOk) {
+      const cudaAsset = pickCudaAsset(cudaVersion, opts.assets);
+      if (cudaAsset) {
+        const cudaZip = path.join(opts.baseDir, cudaAsset.name);
+        report('download-cuda', 0, 0, `下载 CUDA DLLs ${cudaAsset.name}`);
+        await downloadFile({
+          url: cudaAsset.browser_download_url,
+          dest: cudaZip,
+          onProgress: (p) => report(
+            'download-cuda', p.pct, p.mbps,
+            `CUDA DLLs ${p.pct >= 0 ? (p.pct * 100).toFixed(1) + '%' : ''} ${p.mbps.toFixed(1)}MB/s`,
+          ),
+        });
+        await extractZip(cudaZip, cudaDir);
+        await fs.rm(cudaZip, { force: true });
+      } else {
+        report('download-cuda', -1, 0, `未找到 ${cudaVersion} 的 CUDA DLL 包，跳过（GPU 加速可能不可用）`);
+      }
+    }
+    // 6. 验证
+    report('verify', -1, 0, '验证可执行文件');
+    const exeName = process.platform === 'win32' ? 'llama-server.exe' : 'llama-server';
+    const exePath = path.join(versionDir, exeName);
+    let valid = true;
+    try {
+      await (opts.verify ?? verifyExe)(exePath);
+    } catch {
+      valid = false; // 规格 §9.2：标红该版本，不自动选中
+    }
+    // 7. 修剪 + manifest
+    report('prune', -1, 0, '修剪旧版本');
+    const entries = (await readManifest(opts.baseDir)).filter((e) => e.tag !== opts.tag);
+    const entry: InstalledVersion = { tag: opts.tag, cudaVersion, installedAt: Date.now(), valid };
+    const pruned = await pruneVersions(opts.baseDir, [...entries, entry], opts.selectedTag, 2);
+    const prunedSet = new Set(pruned.prunedTags);
+    const manifest = [...entries, entry].filter((e) => !prunedSet.has(e.tag));
+    await writeManifest(opts.baseDir, manifest);
+    report('done', 1, 0, valid ? `更新完成 ${opts.tag}` : `更新完成，但 ${opts.tag} 验证失败（已标红）`);
+    return { ok: true, valid, phase: 'done', cudaVersion, mainFellBack: main.fellBack };
+  } catch (e) {
+    return fail('error', (e as Error).message ?? String(e));
+  }
+}
+```
+
+- [ ] **Step 5: 运行测试确认通过**
+
+运行：`cd /f/llama_lanucher && npx vitest run test/updater.test.ts`
+预期：`Test Files  1 passed (1)`，`Tests  17 passed (17)`。
+
+- [ ] **Step 6: 类型检查 + 提交**
+
+```bash
+cd /f/llama_lanucher && npm run typecheck && git add -A && git -c user.name='dsh' -c user.email='dsh@local' commit -m "updater: GitHub check + range-resume download + extract/prune/verify (spec §9.2)"
+```
