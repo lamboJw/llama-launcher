@@ -4288,3 +4288,756 @@ export async function runUpdate(opts: RunUpdateOptions): Promise<RunUpdateResult
 ```bash
 cd /f/llama_lanucher && npm run typecheck && git add -A && git -c user.name='dsh' -c user.email='dsh@local' commit -m "updater: GitHub check + range-resume download + extract/prune/verify (spec §9.2)"
 ```
+
+---
+
+### Task 14: server-controller.ts + index.ts — 主进程接线（生命周期/切换/IPC/窗口/更新器）
+
+**Files:**
+- Create: `src/main/server-controller.ts`（纯 Node，ProcessManager 注入，fake-server.mjs 可单测）
+- Create: `test/server-controller.test.ts`（8 测试）
+- Modify: `src/main/proxy.ts`（autoSwitch 门控，2 处）、`test/proxy.test.ts`（beforeEach 复位 + 2 新测试）
+- Rewrite: `src/main/index.ts`（Electron 接线：窗口/IPC/启动编排/更新器/版本横幅）、`src/preload/index.ts`（contextBridge API）
+- Modify: `src/renderer/main.ts`（占位屏）、`tsconfig.preload.json`（加 `"exclude": []`）
+
+规格 §2.2/§2.3/§5/§5.4/§9.1/§9.2/§3：start 流程 = 可见端口预检 → 启动即存 profile → 版本探针（`--version` + 横幅）→ spawn + /health 就绪 → 起/重建反向代理；stop 在切换期间 = 取消切换（杀新 server，回 stopped）；崩溃（非 intentional 退出）→ `crashed` + exitCode + stderr 捕获（<10s 记 early）；切换 = 停旧 → 起新 → 等健康，失败抛错（代理回 502）；同模型（忽略大小写）不重启。代理门控：`form.autoSwitch` 关闭时 model 字段被忽略（直接转发，不 400 不切换），`/v1/models` 只列当前模型（规格 §5）。exe 解析：`exeSelection` 空 = 托管基线 b10488，`b\d+` = 托管目录 `<appRoot>/llama.cpp/<tag>/`（cudaDir 加入子进程 PATH 前置），其他 = 自定义路径。计划内偏差：`StartRequest.extraEnv(port)` / `extraArgvPrefix` 为测试注入钩子（应用端不用）；`ServerController` 字段改名 `_switching` 避免与接口方法 `switching()` 影子冲突（与 FakeController 同教训）。
+
+- [ ] **Step 1: 写失败测试 test/server-controller.test.ts**
+
+```ts
+// server-controller.test.ts — server 生命周期与模型切换编排（规格 §2.2/§2.3/§5.4）
+// 测试替身：fake-server.mjs（真实 spawn，node 二进制充当 llama-server）
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { fileURLToPath } from 'node:url';
+import { ProcessManager, isPortFree, type ExitInfo } from '../src/main/process-manager.js';
+import { ServerController, type StartRequest } from '../src/main/server-controller.js';
+import { DEFAULT_FORM } from '../src/main/config.js';
+import type { ModelRef, SwitchState } from '../shared/types.js';
+
+const FAKE = fileURLToPath(new URL('./fake-server.mjs', import.meta.url));
+
+function ref(name: string): ModelRef {
+  return {
+    name,
+    source: 'local',
+    local: { name, path: `/models/${name}.gguf`, size: 1, mtime: Date.now(), mmproj: null, mmprojCandidates: [] },
+  };
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+async function waitFor(fn: () => boolean, ms = 8000): Promise<void> {
+  const t0 = Date.now();
+  for (;;) {
+    if (fn()) return;
+    if (Date.now() - t0 > ms) throw new Error('waitFor timeout');
+    await sleep(50);
+  }
+}
+
+describe('ServerController', () => {
+  let pm: ProcessManager;
+  let ctl: ServerController;
+
+  const req = (model: string, extra: Record<string, string> = {}): StartRequest => ({
+    exe: process.execPath,
+    form: { ...DEFAULT_FORM, extraArgs: '--fake-flag' },
+    model: ref(model),
+    cudaDir: null,
+    extraEnv: (port: number) => ({ FAKE_PORT: String(port), ...extra }),
+    extraArgvPrefix: [FAKE],
+  });
+
+  beforeAll(() => {
+    pm = new ProcessManager();
+    ctl = new ServerController(pm, {}, 3000);
+  });
+
+  afterAll(async () => {
+    await ctl.stop();
+  });
+
+  it('start → running with health-checked internal port; stop releases the port', async () => {
+    await ctl.start(req('fake-model'));
+    expect(ctl.getState().status).toBe('running');
+    expect(ctl.isReady()).toBe(true);
+    expect(ctl.currentModel()).toBe('fake-model');
+    const port = ctl.internalPort();
+    expect(port).toBeGreaterThan(0);
+    expect(pm.running).toBe(true);
+    await ctl.stop();
+    expect(ctl.getState().status).toBe('stopped');
+    expect(pm.running).toBe(false);
+    expect(await isPortFree(port)).toBe(true);
+  });
+
+  it('waits for delayed health (slow model load)', async () => {
+    await ctl.start(req('fake-model', { FAKE_HEALTH_DELAY_MS: '400' }));
+    expect(ctl.getState().status).toBe('running');
+    await ctl.stop();
+  });
+
+  it('reports crash with exit code and captured stderr', async () => {
+    let exitInfo: ExitInfo | null = null;
+    const c2 = new ServerController(new ProcessManager(), { onExit: (i) => { exitInfo = i; } }, 3000);
+    await c2.start(req('fake-model', { FAKE_HEALTH_DELAY_MS: '50', FAKE_CRASH_MS: '1200', FAKE_CRASH_MSG: 'error: invalid argument: --fake-flag' }));
+    expect(c2.getState().status).toBe('running');
+    await waitFor(() => c2.getState().status === 'crashed');
+    expect(c2.getState().exitCode).toBe(1);
+    expect(c2.isReady()).toBe(false);
+    expect(exitInfo).not.toBeNull();
+    expect(exitInfo!.early).toBe(true); // 400ms < 10s
+    expect(exitInfo!.stderr).toContain('error: invalid argument: --fake-flag');
+    await c2.stop();
+  });
+
+  it('start failure (health timeout) → stopped, error thrown', async () => {
+    await expect(ctl.start(req('fake-model', { FAKE_HEALTH_DELAY_MS: '10000' }))).rejects.toThrow(/health check timed out/);
+    expect(ctl.getState().status).toBe('stopped');
+    expect(pm.running).toBe(false);
+  });
+
+  it('restart while running replaces the process', async () => {
+    await ctl.start(req('fake-model'));
+    const pid1 = pm.pid;
+    await ctl.start(req('fake-model'));
+    expect(ctl.getState().status).toBe('running');
+    expect(pm.pid).not.toBe(pid1);
+    await ctl.stop();
+  });
+
+  it('switchTo different model: stop old, start new, update current', async () => {
+    const switchEvents: SwitchState[] = [];
+    const c2 = new ServerController(new ProcessManager(), { onSwitch: (s) => switchEvents.push(s) }, 3000);
+    await c2.start(req('fake-model'));
+    const port1 = c2.internalPort();
+    await c2.switchTo(ref('other-model'));
+    expect(c2.getState().status).toBe('running');
+    expect(c2.currentModel()).toBe('other-model');
+    expect(c2.isReady()).toBe(true);
+    if (port1 !== null && port1 !== c2.internalPort()) expect(await isPortFree(port1)).toBe(true); // 新 server 可能复用了旧端口
+    expect(switchEvents.some((s) => s.switching && s.to === 'other-model')).toBe(true);
+    await c2.stop();
+  });
+
+  it('switchTo same model (case-insensitive) is a no-op', async () => {
+    await ctl.start(req('Fake-Model'));
+    const pid1 = pm.pid;
+    await ctl.switchTo(ref('fake-model'));
+    expect(pm.pid).toBe(pid1);
+    expect(ctl.getState().status).toBe('running');
+    expect(ctl.currentModel()).toBe('Fake-Model');
+    await ctl.stop();
+  });
+
+  it('switchTo before start throws', async () => {
+    const c3 = new ServerController(new ProcessManager(), {}, 3000);
+    await expect(c3.switchTo(ref('any-model'))).rejects.toThrow(/not started/);
+  });
+});
+```
+
+- [ ] **Step 2: 确认失败**
+
+运行：`npx vitest run test/server-controller.test.ts`
+预期：`Cannot find module '../src/main/server-controller.js'`（no tests）
+
+- [ ] **Step 3: 实现 src/main/server-controller.ts**
+
+状态机：stopped → starting → running ⇄ switching；非 intentional onExit 且状态 ∈ {running, starting, switching} → crashed（exitCode 记录）。start 失败 → pm.stop + 状态回 stopped + 抛错。switchTo 复用 lastReq（仅换 model）。
+
+```ts
+// server-controller.ts — llama-server 生命周期与模型切换编排（规格 §2.2/§2.3/§5.4）
+// 纯 Node（ProcessManager 注入），fake-server.mjs 可单测；实现代理的 SwitchController 接口
+import path from 'node:path';
+import { buildArgs } from './args.js';
+import { probeFreePort, ProcessManager, type ExitInfo } from './process-manager.js';
+import type { SwitchController } from './proxy.js';
+import type { FormValues, ModelRef, ServerState, SwitchState } from '../shared/types.js';
+
+export interface StartRequest {
+  exe: string;
+  form: FormValues;
+  model: ModelRef;
+  /** 托管 CUDA 目录（加入子进程 PATH 前置）；自定义 exe 传 null（规格 §9.2） */
+  cudaDir: string | null;
+  /** 测试注入：按探测端口追加环境变量（如 FAKE_PORT）；应用端不用 */
+  extraEnv?: (port: number) => Record<string, string>;
+  /** 测试注入：argv 前缀（如 fake-server 脚本路径）；应用端不用 */
+  extraArgvPrefix?: string[];
+}
+
+export interface ControllerEvents {
+  onStateChange?: (s: ServerState) => void;
+  onLog?: (line: string) => void;
+  onExit?: (info: ExitInfo) => void;
+  onSwitch?: (s: SwitchState) => void;
+}
+
+export class ServerController implements SwitchController {
+  private pm: ProcessManager;
+  private events: ControllerEvents;
+  private healthTimeoutMs: number;
+  private state: ServerState = { status: 'stopped', port: null, model: null, exitCode: null };
+  private port = 0;
+  private lastReq: StartRequest | null = null;
+  private _switching = false;
+  private unionList: ModelRef[] = [];
+
+  constructor(pm: ProcessManager, events: ControllerEvents = {}, healthTimeoutMs = 300000) {
+    this.pm = pm;
+    this.events = events;
+    this.healthTimeoutMs = healthTimeoutMs;
+  }
+
+  // ---- SwitchController（代理注入）----
+  internalPort(): number | null {
+    const s = this.state.status;
+    return s === 'running' || s === 'starting' || s === 'switching' ? this.port : null;
+  }
+  isReady(): boolean { return this.state.status === 'running'; }
+  currentModel(): string | null { return this.state.model; }
+  union(): ModelRef[] { return this.unionList; }
+  switching(): boolean { return this._switching; }
+  setUnion(models: ModelRef[]): void { this.unionList = models; }
+  getState(): ServerState { return { ...this.state }; }
+
+  private setState(patch: Partial<ServerState>): void {
+    this.state = { ...this.state, ...patch };
+    this.events.onStateChange?.(this.getState());
+  }
+
+  private handleExit(info: ExitInfo): void {
+    if (info.intentional) return;
+    const s = this.state.status;
+    if (s !== 'running' && s !== 'starting' && s !== 'switching') return;
+    this.setState({ status: 'crashed', port: null, exitCode: info.code });
+    this.events.onExit?.(info);
+  }
+
+  /** 启动（运行中则重启）；失败时清理并抛出（规格 §2.2：spawn → 起代理 → /health 就绪） */
+  async start(req: StartRequest): Promise<void> {
+    const busy = this.state.status === 'starting' || this.state.status === 'running' || this.state.status === 'switching';
+    if (busy) await this.stop();
+    this.setState({ status: 'starting', port: null, model: req.model.name, exitCode: null });
+    try {
+      const port = await probeFreePort();
+      this.port = port;
+      const built = buildArgs(req.form, req.model, port);
+      const env: Record<string, string> = { ...built.env, ...(req.extraEnv ? req.extraEnv(port) : {}) };
+      if (req.cudaDir) env.PATH = `${req.cudaDir}${path.delimiter}${process.env.PATH ?? ''}`;
+      await this.pm.start({
+        exe: req.exe,
+        argv: [...(req.extraArgvPrefix ?? []), ...built.argv],
+        env,
+        port,
+        onLine: (line) => this.events.onLog?.(line),
+        onExit: (info) => this.handleExit(info),
+      });
+      this.lastReq = req;
+      await this.pm.waitForHealth(this.healthTimeoutMs);
+      this.setState({ status: 'running', port, model: req.model.name, exitCode: null });
+    } catch (e) {
+      await this.pm.stop().catch(() => {});
+      this.setState({ status: 'stopped', port: null, exitCode: null });
+      throw e;
+    }
+  }
+
+  /** 模型切换（规格 §5.4）：停旧 → 起新 → 等健康；失败抛出（代理回 502，状态回 stopped） */
+  async switchTo(model: ModelRef): Promise<void> {
+    if (this._switching) throw new Error('switch already in progress');
+    const cur = this.state.model;
+    if (cur !== null && model.name.toLowerCase() === cur.toLowerCase()) return; // 同模型（忽略大小写）不重启
+    const last = this.lastReq;
+    if (!last) throw new Error('server not started');
+    this._switching = true;
+    this.events.onSwitch?.({ switching: true, from: this.state.model, to: model.name });
+    this.setState({ status: 'switching', exitCode: null });
+    try {
+      await this.start({ ...last, model });
+    } finally {
+      this._switching = false;
+      this.events.onSwitch?.({ switching: false, from: null, to: null });
+    }
+  }
+
+  /** 停止（规格 §2.3）；切换期间停止 = 取消切换（杀掉新 server，回到 stopped） */
+  async stop(): Promise<void> {
+    if (this.pm.running) await this.pm.stop();
+    this.setState({ status: 'stopped', port: null, exitCode: null });
+  }
+}
+```
+
+运行：`npx vitest run test/server-controller.test.ts`
+预期：8 passed。踩坑：fake server 以 node 二进制 spawn，argv 需 `extraArgvPrefix: [FAKE]`（否则 node 把模型路径当脚本执行立即退出 → `server exited during startup`）；崩溃测试 CRASH_MS 必须晚于第二次健康轮询（500ms 间隔，取 1200ms）；新 server 可能复用旧端口（probeFreePort 取首个空闲），断言需排除同端口。
+
+- [ ] **Step 4: proxy autoSwitch 门控（规格 §5）+ 2 新测试**
+
+proxy.ts 编辑 1（handle 内 model 检查加门控）：
+```ts
+    const model = this.extractModel(body);
+    if (model !== null && this.form.autoSwitch) {
+```
+proxy.ts 编辑 2（respondModels：关闭时只列当前模型）：
+```ts
+    const list = this.form.autoSwitch
+      ? ctrl.union()
+      : current !== null
+        ? [{ name: current, source: 'local' as const }]
+        : [];
+    const data = list.map((m) => ({
+```
+test/proxy.test.ts：beforeEach 加 `proxy.setForm({ ...DEFAULT_FORM, autoSwitch: true });`（DEFAULT_FORM.autoSwitch 为 false，旧切换测试需显式开）；文件尾追加 2 测试：
+```ts
+  it('autoSwitch off ignores the model field (no switch, no 400)', async () => {
+    proxy.setForm({ ...DEFAULT_FORM, autoSwitch: false });
+    const res = await postJson(proxyPort, '/v1/chat/completions', { model: 'nope-model', messages: [{ role: 'user', content: 'hi' }], stream: true });
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('"content":"hel"');
+    expect(ctrl.switchCalls).toEqual([]);
+  });
+
+  it('autoSwitch off: /v1/models lists only the current model', async () => {
+    proxy.setForm({ ...DEFAULT_FORM, autoSwitch: false });
+    const res = await doGet(proxyPort, '/v1/models');
+    const obj = JSON.parse(res.body) as { data: { id: string; current: boolean }[] };
+    expect(obj.data).toHaveLength(1);
+    expect(obj.data[0].id).toBe('fake-model');
+    expect(obj.data[0].current).toBe(true);
+  });
+```
+
+运行：`npx vitest run test/proxy.test.ts`
+预期：17 passed（15 旧 + 2 新）
+
+- [ ] **Step 5: index.ts 完整接线 + preload + 占位 renderer**
+
+index.ts 结构：模块级状态（config/profiles/pm/ctl/stats/rounds/proxy/records/并集缓存/installed/横幅）；`send(channel, payload)` 守护 win；日志 100ms 批量 IPC；`resolveExe(form)`（空=基线托管、`b\d+`=托管目录+cudaDir、其他=自定义）；`probeVersion(exe)`（execFile `--version` → parseVersion）；`refreshUnion()`（scanModels + scanHfCache → buildModelUnion → ctl.setUnion，HF 仅 autoSwitch 开时）；`startServer(form, model)`（端口预检 → profile 存 → 配置存 → 版本横幅 → ctl.start → 起/重建 LauncherProxy）；IPC：app:boot / models:scan / hf:scan / server:start / server:stop / form:save（CORS 经 proxy.setForm 即时生效、并集按字段变化刷新、exeSelection 变则重探版本）/ profiles:* / records:files / records:tail / updater:check / updater:run（runUpdate + 成功后自动选中新版本）/ dialog:dir / stats:get；事件：state:change / log:lines / switch:change / stats:request（含 latest+history 20 条）/ update:progress / banner:change / exit:crash；窗口关闭 → 停 proxy + ctl 后 quit。preload 经 contextBridge 暴露同名 API + `on(channel, cb)` 白名单订阅。
+
+src/main/index.ts（完整）：
+```ts
+// index.ts — Electron 主进程：窗口 / IPC / 启动编排（规格 §2/§3/§5/§9/§10）
+import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { AppConfig, defaultConfigDir } from './config.js';
+import { scanModels } from './scan.js';
+import { scanHfCache, buildModelUnion } from './hf-cache.js';
+import { ProfilesStore } from './profiles.js';
+import { ProcessManager, isPortFree } from './process-manager.js';
+import { ServerController } from './server-controller.js';
+import { LauncherProxy } from './proxy.js';
+import { RecordsStore } from './records.js';
+import { StatsStore } from './stats.js';
+import { RoundTracker, parseTimingLine } from './log-parser.js';
+import { checkLatestRelease, runUpdate, readManifest, type ReleaseInfo } from './updater.js';
+import { parseVersion, versionBanner, BASELINE_BUILD } from './version.js';
+import type {
+  FormValues, HfModel, InstalledVersion, LocalModel, ModelRef, ParsedVersion,
+  RequestStats, RoundStats, UpdateProgress,
+} from '../shared/types.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+
+// ---------- 状态 ----------
+let win: BrowserWindow | null = null;
+const config = new AppConfig();
+const profiles = new ProfilesStore(path.join(defaultConfigDir(), 'profiles'));
+const recordsDir = path.join(defaultConfigDir(), 'records');
+const pm = new ProcessManager();
+const stats = new StatsStore();
+const rounds = new RoundTracker();
+const ctl = new ServerController(pm, {
+  onStateChange: (s) => send('state:change', s),
+  onLog: (line) => {
+    pushLog(line);
+    const ev = parseTimingLine(line);
+    if (ev) {
+      const ts = Date.now();
+      if (ev.kind === 'prompt') rounds.onPrompt(ev, ts);
+      else rounds.onEval(ev, ts);
+    }
+  },
+  onExit: (info) => send('exit:crash', info),
+  onSwitch: (s) => send('switch:change', s),
+});
+let proxy: LauncherProxy | null = null;
+let records: RecordsStore | null = null;
+let localModels: LocalModel[] = [];
+let hfModels: HfModel[] = [];
+let installed: InstalledVersion[] = [];
+let lastRelease: ReleaseInfo | null = null;
+let versionInfo: ParsedVersion | null = null;
+let versionMsg: string | null = null;
+let updateMsg: string | null = null;
+let updateProgress: UpdateProgress | null = null;
+
+const appRoot = (): string => (app.isPackaged ? path.dirname(app.getPath('exe')) : process.cwd());
+const llamaBaseDir = (): string => path.join(appRoot(), 'llama.cpp');
+
+const send = (channel: string, payload: unknown): void => {
+  if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+};
+
+// 日志 100ms 批量发送（避免逐行 IPC 风暴）
+let logBuf: string[] = [];
+let logTimer: NodeJS.Timeout | null = null;
+function pushLog(line: string): void {
+  logBuf.push(line);
+  if (logTimer) return;
+  logTimer = setTimeout(() => {
+    logTimer = null;
+    const batch = logBuf;
+    logBuf = [];
+    send('log:lines', batch);
+  }, 100);
+}
+
+function refreshBanner(): void {
+  send('banner:change', { version: versionMsg, update: updateMsg });
+}
+
+// ---------- exe 解析（托管版本 / 自定义路径，规格 §9.2） ----------
+function managedPath(entry: InstalledVersion): { exe: string; cudaDir: string | null } {
+  const exeName = process.platform === 'win32' ? 'llama-server.exe' : 'llama-server';
+  const exe = path.join(llamaBaseDir(), entry.tag, exeName);
+  const cudaDir = entry.cudaVersion ? path.join(llamaBaseDir(), 'cuda', `cuda-${entry.cudaVersion}`) : null;
+  return { exe, cudaDir };
+}
+
+function resolveExe(form: FormValues): { exe: string; cudaDir: string | null } {
+  const sel = form.exeSelection.trim();
+  if (sel === '') {
+    const entry = installed.find((v) => v.tag === `b${BASELINE_BUILD}` && v.valid !== false);
+    if (entry) return managedPath(entry);
+    throw new Error('请在设置区选择 llama.cpp 版本（托管版本或自定义路径）');
+  }
+  if (/^b\d+$/.test(sel)) {
+    const entry = installed.find((v) => v.tag === sel);
+    if (!entry) throw new Error(`托管版本 ${sel} 未安装（点"立即更新"安装）`);
+    return managedPath(entry);
+  }
+  return { exe: sel, cudaDir: null }; // 自定义路径
+}
+
+function probeVersion(exe: string): Promise<ParsedVersion> {
+  return new Promise((resolve) => {
+    execFile(exe, ['--version'], { timeout: 10000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+      resolve(parseVersion(err ? (stderr ?? '') : (stdout ?? '') + (stderr ?? '')));
+    });
+  });
+}
+
+// ---------- 模型并集（本地 ∪ HF，规格 §4.1） ----------
+async function refreshUnion(): Promise<void> {
+  const form = config.getSettings().form;
+  try { localModels = form.scanDir ? scanModels(form.scanDir) : []; } catch { localModels = []; }
+  try { hfModels = form.autoSwitch && form.hfCacheDir ? scanHfCache(form.hfCacheDir) : []; } catch { hfModels = []; }
+  ctl.setUnion(buildModelUnion(localModels, hfModels));
+}
+
+async function refreshInstalled(): Promise<void> {
+  try { installed = await readManifest(llamaBaseDir()); } catch { installed = []; }
+}
+
+// ---------- 启动 / 停止（规格 §2.2/§2.3） ----------
+async function startServer(form: FormValues, model: ModelRef): Promise<void> {
+  if (!(await isPortFree(form.visiblePort))) {
+    throw new Error(`可见端口 ${form.visiblePort} 已被占用，请在"服务"组更换端口`);
+  }
+  const { exe, cudaDir } = resolveExe(form);
+  // 启动即保存 profile（规格 §5.1）
+  const key = model.local ? model.local.path : model.name;
+  await profiles.save(key, form);
+  config.saveSettings({ form });
+  // 版本探针 + 横幅（规格 §9.1）
+  versionInfo = await probeVersion(exe);
+  versionMsg = versionBanner(versionInfo);
+  refreshBanner();
+  // 起 server（spawn → /health 就绪）
+  await ctl.start({ exe, form, model, cudaDir });
+  // 起 / 重建反向代理（规格 §2.1）
+  if (proxy) { await proxy.stop(); proxy = null; }
+  records = form.recordRounds ? new RecordsStore(recordsDir, { maxTotalBytes: form.recordsMaxTotalBytes }) : null;
+  proxy = new LauncherProxy({
+    host: form.proxyHost,
+    port: form.visiblePort,
+    controller: ctl,
+    form: { ...form },
+    records,
+    onStats: (s: RequestStats) => {
+      stats.addRequest(s);
+      send('stats:request', { request: s, latest: stats.getLatest(), history: stats.getHistory().slice(-20) });
+    },
+  });
+  await proxy.start();
+}
+
+async function stopServer(): Promise<void> {
+  if (proxy) { await proxy.stop(); proxy = null; }
+  records = null;
+  await ctl.stop();
+}
+
+// ---------- IPC ----------
+function registerIpc(): void {
+  ipcMain.handle('app:boot', async () => {
+    await refreshInstalled();
+    await refreshUnion();
+    const form = config.getSettings().form;
+    return {
+      appRoot: appRoot(),
+      form,
+      server: ctl.getState(),
+      localModels,
+      hfModels,
+      union: ctl.union(),
+      installed,
+      version: versionInfo,
+      banner: { version: versionMsg, update: updateMsg },
+      stats: { latest: stats.getLatest(), history: stats.getHistory().slice(-20) },
+      recordsDir,
+      updateProgress,
+    };
+  });
+
+  ipcMain.handle('models:scan', async (_e, dir: string) => {
+    const list: LocalModel[] = dir ? scanModels(dir) : [];
+    localModels = list;
+    config.updateForm({ scanDir: dir });
+    await refreshUnion();
+    return list;
+  });
+
+  ipcMain.handle('hf:scan', async (_e, dir: string) => {
+    const list: HfModel[] = dir ? scanHfCache(dir) : [];
+    hfModels = list;
+    config.updateForm({ hfCacheDir: dir });
+    await refreshUnion();
+    return list;
+  });
+
+  ipcMain.handle('server:start', async (_e, args: { form: FormValues; model: ModelRef }) => {
+    await startServer(args.form, args.model);
+  });
+
+  ipcMain.handle('server:stop', async () => {
+    await stopServer();
+  });
+
+  ipcMain.handle('form:save', async (_e, form: FormValues) => {
+    const prev = config.getSettings().form;
+    config.saveSettings({ form });
+    if (proxy) proxy.setForm({ ...form }); // CORS 等立即生效
+    if (form.autoSwitch !== prev.autoSwitch || form.hfCacheDir !== prev.hfCacheDir || form.scanDir !== prev.scanDir) {
+      await refreshUnion();
+    }
+    if (form.exeSelection !== prev.exeSelection) {
+      try {
+        const { exe } = resolveExe(form);
+        versionInfo = await probeVersion(exe);
+        versionMsg = versionBanner(versionInfo);
+      } catch { versionInfo = null; versionMsg = null; }
+      refreshBanner();
+    }
+  });
+
+  ipcMain.handle('profiles:list', async () => profiles.list());
+  ipcMain.handle('profiles:save', async (_e, args: { model: string; params: FormValues }) => profiles.save(args.model, args.params));
+  ipcMain.handle('profiles:load', async (_e, model: string) => profiles.load(model));
+  ipcMain.handle('profiles:delete', async (_e, model: string) => profiles.delete(model));
+
+  ipcMain.handle('records:files', async () => (records ? records.listFiles() : []));
+  ipcMain.handle('records:tail', async (_e, page: number) => {
+    const store = records ?? new RecordsStore(recordsDir, { maxTotalBytes: config.getSettings().form.recordsMaxTotalBytes });
+    return store.tailPage(page, 50);
+  });
+
+  ipcMain.handle('updater:check', async () => {
+    await refreshInstalled();
+    const latest = await checkLatestRelease();
+    lastRelease = latest;
+    updateMsg = latest && !installed.some((v) => v.tag === latest.tag_name) ? `发现新版本 ${latest.tag_name}` : null;
+    refreshBanner();
+    return { latest, installed };
+  });
+
+  ipcMain.handle('updater:run', async (_e, tag: string) => {
+    let release = lastRelease;
+    if (!release || release.tag_name !== tag) release = await checkLatestRelease();
+    if (!release || release.tag_name !== tag) throw new Error('获取最新版本信息失败（网络错误？）');
+    const form = config.getSettings().form;
+    const sel = form.exeSelection.trim();
+    const selectedTag = /^b\d+$/.test(sel) ? sel : null;
+    updateProgress = { phase: 'check', pct: -1, mbps: 0, message: '开始更新' };
+    send('update:progress', updateProgress);
+    const res = await runUpdate({
+      baseDir: llamaBaseDir(),
+      tag: release.tag_name,
+      assets: release.assets,
+      selectedTag,
+      minFreeBytes: 2 * 1024 * 1024 * 1024,
+      onProgress: (p) => { updateProgress = p; send('update:progress', p); },
+    });
+    await refreshInstalled();
+    if (res.ok && res.valid) {
+      config.updateForm({ exeSelection: release.tag_name }); // 更新后自动选中（规格 §9.2）
+      updateMsg = null;
+      const entry = installed.find((v) => v.tag === release.tag_name);
+      if (entry) {
+        const { exe } = managedPath(entry);
+        versionInfo = await probeVersion(exe);
+        versionMsg = versionBanner(versionInfo);
+      }
+      refreshBanner();
+    }
+    return res;
+  });
+
+  ipcMain.handle('dialog:dir', async (_e, defaultPath?: string) => {
+    if (!win) return null;
+    const r = await dialog.showOpenDialog(win, {
+      title: '选择目录',
+      defaultPath: defaultPath || appRoot(),
+      properties: ['openDirectory'],
+    });
+    return r.canceled ? null : r.filePaths[0];
+  });
+
+  ipcMain.handle('stats:get', async () => ({ latest: stats.getLatest(), history: stats.getHistory().slice(-20) }));
+}
+
+// ---------- 窗口 / 生命周期 ----------
+function createWindow(): void {
+  win = new BrowserWindow({
+    width: 1440,
+    height: 900,
+    title: 'llama-server 启动器',
+    webPreferences: {
+      preload: path.join(here, '..', 'preload', 'index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  win.loadFile(path.join(here, '..', 'renderer', 'index.html'));
+  win.on('closed', () => { win = null; });
+}
+
+app.whenReady().then(async () => {
+  registerIpc();
+  createWindow();
+  await refreshInstalled();
+  await refreshUnion();
+  // 异步检查更新（不阻塞启动，规格 §9.2）
+  void (async () => {
+    try {
+      const latest = await checkLatestRelease();
+      lastRelease = latest;
+      if (latest && !installed.some((v) => v.tag === latest.tag_name)) {
+        updateMsg = `发现新版本 ${latest.tag_name}`;
+        refreshBanner();
+      }
+    } catch { /* 网络失败：静默 */ }
+  })();
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
+
+app.on('window-all-closed', () => {
+  // 退出前停 server 与代理（规格 §2.3）
+  void (async () => {
+    try {
+      if (proxy) await proxy.stop();
+      await ctl.stop();
+    } catch { /* 忽略退出期错误 */ }
+    app.quit();
+  })();
+});
+```
+
+src/preload/index.ts（完整）：
+```ts
+// preload/index.ts — contextBridge API（CJS 编译，规格 §3 顶栏/左栏/右栏全部交互）
+import { contextBridge, ipcRenderer } from 'electron';
+
+const EVENTS = ['state:change', 'log:lines', 'switch:change', 'stats:request', 'stats:round', 'update:progress', 'banner:change', 'exit:crash'] as const;
+
+contextBridge.exposeInMainWorld('llama', {
+  boot: (): Promise<unknown> => ipcRenderer.invoke('app:boot'),
+  scanModels: (dir: string): Promise<unknown> => ipcRenderer.invoke('models:scan', dir),
+  scanHf: (dir: string): Promise<unknown> => ipcRenderer.invoke('hf:scan', dir),
+  startServer: (form: unknown, model: unknown): Promise<void> => ipcRenderer.invoke('server:start', { form, model }),
+  stopServer: (): Promise<void> => ipcRenderer.invoke('server:stop'),
+  saveForm: (form: unknown): Promise<void> => ipcRenderer.invoke('form:save', form),
+  listProfiles: (): Promise<unknown> => ipcRenderer.invoke('profiles:list'),
+  saveProfile: (model: string, params: unknown): Promise<void> => ipcRenderer.invoke('profiles:save', { model, params }),
+  loadProfile: (model: string): Promise<unknown> => ipcRenderer.invoke('profiles:load', model),
+  deleteProfile: (model: string): Promise<void> => ipcRenderer.invoke('profiles:delete', model),
+  recordFiles: (): Promise<unknown> => ipcRenderer.invoke('records:files'),
+  recordsTail: (page: number): Promise<unknown> => ipcRenderer.invoke('records:tail', page),
+  checkUpdate: (): Promise<unknown> => ipcRenderer.invoke('updater:check'),
+  runUpdate: (tag: string): Promise<unknown> => ipcRenderer.invoke('updater:run', tag),
+  openDirDialog: (defaultPath?: string): Promise<string | null> => ipcRenderer.invoke('dialog:dir', defaultPath),
+  getStats: (): Promise<unknown> => ipcRenderer.invoke('stats:get'),
+  on: (channel: string, cb: (payload: unknown) => void): (() => void) => {
+    if (!(EVENTS as readonly string[]).includes(channel)) return () => {};
+    const listener = (_e: unknown, payload: unknown): void => cb(payload);
+    ipcRenderer.on(channel, listener);
+    return () => { ipcRenderer.removeListener(channel, listener); };
+  },
+});
+export {};
+```
+
+src/renderer/main.ts（占位，Task 15-17 替换）：
+```ts
+// renderer/main.ts — 占位界面（Task 15-17 替换为完整 UI：布局 §3 / 彩色日志 / 统计 / 聊天 / 轮次记录）
+declare global {
+  interface Window {
+    llama: {
+      boot(): Promise<{ server: { status: string; port: number | null; model: string | null }; form: unknown }>;
+      startServer(form: unknown, model: unknown): Promise<void>;
+      stopServer(): Promise<void>;
+      saveForm(form: unknown): Promise<void>;
+      on(channel: string, cb: (payload: unknown) => void): () => void;
+    };
+  }
+}
+
+async function main(): Promise<void> {
+  const app = document.getElementById('app');
+  if (!app) return;
+  app.textContent = '正在连接主进程…';
+  try {
+    const state = await window.llama.boot();
+    const srv = state.server;
+    app.textContent = `主进程已连接 | server: ${srv.status}${srv.port ? ` :${srv.port}` : ''}${srv.model ? ` ${srv.model}` : ''}`;
+    window.llama.on('state:change', (p: unknown) => {
+      const s = p as { status: string; port: number | null; model: string | null };
+      app.textContent = `state:change → ${s.status}${s.port ? ` :${s.port}` : ''}${s.model ? ` ${s.model}` : ''}`;
+    });
+  } catch (e) {
+    app.textContent = `主进程连接失败: ${String(e)}`;
+  }
+}
+void main();
+export {};
+```
+
+tsconfig.preload.json 加 `"exclude": []`（基座 exclude src/preload 被继承 → TS18003 no inputs）。
+
+运行：`npm run typecheck && npm run build`
+预期：无类型错误；dist/main/server-controller.js、dist/preload/index.js（CJS `require("electron")`）、dist/renderer/main.js 均生成。踩坑：`ServerController` 字段 `switching` 与接口方法 `switching()` 冲突（TS2300 重复标识符）→ 字段改 `_switching`。
+
+- [ ] **Step 6: 全量测试 + 提交**
+
+运行：`npm test`
+预期：14 suites / 123 tests 全绿（113 + 8 controller + 2 proxy）。
+
+```bash
+git add -A && git commit -m "main: server controller + proxy autoSwitch gate + Electron wiring (IPC/window/updater/version)"
+```
