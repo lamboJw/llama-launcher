@@ -84,7 +84,7 @@ export interface RoundRecord {
 
 export interface Profile { model: string; params: FormValues; savedAt: number }
 
-export interface InstalledVersion { tag: string; cudaVersion: string | null; installedAt: number }
+export interface InstalledVersion { tag: string; cudaVersion: string | null; installedAt: number; valid?: boolean }
 
 export interface ServerState {
   status: 'stopped' | 'starting' | 'running' | 'switching' | 'crashed';

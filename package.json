@@ -12,9 +12,13 @@
     "package": "npm run build && electron-builder --win dir && node scripts/zip-release.mjs"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
     "@types/node": "^24.0.0",
     "electron": "^43.4.0",
     "typescript": "^5.5.0",
     "vitest": "^4.0.0"
+  },
+  "dependencies": {
+    "adm-zip": "^0.6.0"
   }
 }
