@@ -259,8 +259,6 @@ function buildExeField(): HTMLElement {
   sel.addEventListener('change', sync);
   input.addEventListener('change', sync);
   (sel as HTMLSelectElement & { __sync?: () => void }).__sync = sync;
-  (sel as HTMLSelectElement & { __fill?: () => void }).__fill = fillExeOptions;
-  fillExeOptions();
   return row;
 }
 
