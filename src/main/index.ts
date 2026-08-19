@@ -220,6 +220,10 @@ function registerIpc(): void {
     const prev = config.getSettings().form;
     config.saveSettings({ form });
     if (proxy) proxy.setForm({ ...form }); // CORS 等立即生效
+    if (form.recordRounds !== prev.recordRounds) {
+      records = form.recordRounds ? new RecordsStore(recordsDir, { maxTotalBytes: form.recordsMaxTotalBytes }) : null;
+      if (proxy) proxy.setRecords(records); // 运行中切换立即生效
+    }
     if (form.autoSwitch !== prev.autoSwitch || form.hfCacheDir !== prev.hfCacheDir || form.scanDir !== prev.scanDir) {
       await refreshUnion();
     }

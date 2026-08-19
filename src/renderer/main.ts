@@ -1,6 +1,6 @@
 // renderer/main.ts — 主 UI（规格 §3：顶栏 / 左栏设置 / 右栏 tabs）；Task 16-17 填充统计/聊天/轮次记录
 import { ansiHtml } from './ansi.js';
-import type { FormValues, ModelRef, ServerState, Profile, RoundStats, UpdateProgress, InstalledVersion } from '../shared/types.js';
+import type { FormValues, ModelRef, ServerState, Profile, RoundRecord, RoundStats, UpdateProgress, InstalledVersion } from '../shared/types.js';
 
 interface BootState {
   appRoot: string;
@@ -10,6 +10,7 @@ interface BootState {
   installed: InstalledVersion[];
   banner: { version: string | null; update: string | null };
   stats: { latest: RoundStats | null; history: RoundStats[] };
+  recordsDir: string;
 }
 
 interface ExitInfo { code: number | null; early: boolean; stderr: string; intentional: boolean }
@@ -29,6 +30,8 @@ declare global {
       checkUpdate(): Promise<{ latest: { tag_name: string; assets: unknown[] } | null; installed: InstalledVersion[] }>;
       runUpdate(tag: string): Promise<{ ok: boolean; error?: string }>;
       openDirDialog(defaultPath?: string): Promise<string | null>;
+      recordFiles(): Promise<string[]>;
+      recordsTail(page: number): Promise<{ records: RoundRecord[]; hasMore: boolean }>;
       on(channel: string, cb: (payload: unknown) => void): () => void;
     };
   }
@@ -127,6 +130,10 @@ let union: ModelRef[] = [];
 let installed: InstalledVersion[] = [];
 let latestTag: string | null = null;
 let serverState: ServerState = { status: 'stopped', port: null, model: null, exitCode: null };
+let activeTab = 'logs';
+let recordsDir = '';
+let recPage = 0;
+let recHasMore = false;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -533,6 +540,70 @@ async function chatSend(): Promise<void> {
   }
 }
 
+// ---------- 轮次记录（规格 §3 勾选项） ----------
+async function loadRecords(): Promise<void> {
+  const box = $<HTMLDivElement>('records-view');
+  const state = $<HTMLSpanElement>('records-state');
+  const dirEl = $<HTMLSpanElement>('records-dir');
+  box.textContent = '';
+  dirEl.textContent = recordsDir !== '' ? `目录: ${recordsDir}` : '';
+  if (!form || !form.recordRounds) {
+    state.textContent = '未启用（App 组勾选「记录每轮 prompt/decode」；运行中切换立即生效）';
+    const d = document.createElement('div');
+    d.className = 'placeholder';
+    d.textContent = '启用后，每一轮请求的 prompt 与 decode 内容将记录在本地（JSONL 分文件，总量受 App 组上限约束）';
+    box.appendChild(d);
+    $<HTMLButtonElement>('records-prev').disabled = true;
+    $<HTMLButtonElement>('records-next').disabled = true;
+    return;
+  }
+  state.textContent = '已启用';
+  const files = await window.llama.recordFiles();
+  dirEl.textContent = files.length > 0 ? `${files.length} 个记录文件` : '（暂无记录）';
+  const page = await window.llama.recordsTail(recPage);
+  recHasMore = page.hasMore;
+  for (const r of page.records) box.appendChild(renderRecord(r));
+  if (page.records.length === 0) {
+    const d = document.createElement('div');
+    d.className = 'placeholder';
+    d.textContent = '（本页无记录）';
+    box.appendChild(d);
+  }
+  $<HTMLDivElement>('records-view').scrollTop = 0;
+  $<HTMLSpanElement>('records-page').textContent = `第 ${recPage} 页（每页 50，第 0 页最新）`;
+  $<HTMLButtonElement>('records-prev').disabled = recPage === 0;
+  $<HTMLButtonElement>('records-next').disabled = !recHasMore;
+}
+
+function renderRecord(r: RoundRecord): HTMLElement {
+  const d = document.createElement('div');
+  d.className = 'rec';
+  const head = document.createElement('div');
+  head.className = 'rec-head';
+  head.innerHTML = `<span><b>${new Date(r.ts).toLocaleString()}</b></span>`;
+  const mEl = document.createElement('span');
+  mEl.textContent = `模型: ${r.model}`;
+  head.appendChild(mEl);
+  if (r.ttft_ms !== null) {
+    const t = document.createElement('span');
+    t.textContent = `TTFT: ${r.ttft_ms} ms`;
+    head.appendChild(t);
+  }
+  d.appendChild(head);
+  const mk = (lbl: string, text: string): void => {
+    const l = document.createElement('div');
+    l.className = 'lbl';
+    l.textContent = lbl;
+    d.appendChild(l);
+    const pre = document.createElement('pre');
+    pre.textContent = text === '' ? '（空）' : text;
+    d.appendChild(pre);
+  };
+  mk('prompt', r.prompt);
+  mk('decode', r.decode);
+  return d;
+}
+
 // ---------- 事件订阅 ----------
 function subscribeEvents(): void {
   window.llama.on('state:change', (p) => renderState(p as ServerState));
@@ -545,6 +616,7 @@ function subscribeEvents(): void {
   window.llama.on('stats:round', (p) => {
     const s = p as { latest: RoundStats | null; history: RoundStats[] };
     renderStats(s.latest, s.history);
+    if (activeTab === 'records' && form?.recordRounds) void loadRecords();
   });
   window.llama.on('update:progress', (p) => {
     const u = p as UpdateProgress;
@@ -587,6 +659,9 @@ function wireButtons(): void {
   $<HTMLButtonElement>('btn-log-clear').addEventListener('click', () => {
     $<HTMLDivElement>('log-view').textContent = '';
   });
+  $<HTMLButtonElement>('records-refresh').addEventListener('click', () => void loadRecords());
+  $<HTMLButtonElement>('records-prev').addEventListener('click', () => { recPage = Math.max(0, recPage - 1); void loadRecords(); });
+  $<HTMLButtonElement>('records-next').addEventListener('click', () => { if (recHasMore) { recPage += 1; void loadRecords(); } });
   $<HTMLButtonElement>('chat-send').addEventListener('click', () => void chatSend());
   $<HTMLButtonElement>('chat-clear').addEventListener('click', () => {
     chatHistory.length = 0;
@@ -601,9 +676,11 @@ function wireButtons(): void {
       for (const x of Array.from(tabs)) x.classList.remove('active');
       t.classList.add('active');
       const name = t.getAttribute('data-tab') ?? 'logs';
+      activeTab = name;
       for (const tab of Array.from(document.querySelectorAll('.tab'))) {
         tab.classList.toggle('hidden', `tab-${name}` !== tab.id);
       }
+      if (name === 'records') void loadRecords();
     });
   }
   $<HTMLButtonElement>('btn-profile-apply').addEventListener('click', async () => {
@@ -652,6 +729,7 @@ async function main(): Promise<void> {
   const s = await window.llama.boot();
   form = s.form;
   union = s.union;
+  recordsDir = s.recordsDir;
   installed = s.installed;
   populateForm();
   buildModelSelect(s.server.model);
