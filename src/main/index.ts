@@ -130,7 +130,7 @@ function resolveExe(form: FormValues): { exe: string; cudaDir: string | null; fa
   if (sel === '') {
     const entry = installed.find((v) => v.tag === `b${BASELINE_BUILD}` && v.valid !== false);
     if (entry) return { ...managedPath(entry), fallbackCudaDirs: [] };
-    throw new Error('请在设置区选择 llama.cpp 版本（托管版本或自定义路径）');
+    throw new Error(`托管基线 b${BASELINE_BUILD} 未安装：请在设置区点「检查更新 / 立即更新」下载 llama.cpp，或在「llama.cpp 版本」下拉框选「自定义路径…」并填写 llama-server.exe 的路径`);
   }
   if (/^b\d+$/.test(sel)) {
     const entry = installed.find((v) => v.tag === sel);

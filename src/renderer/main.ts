@@ -267,7 +267,9 @@ function fillExeOptions(): void {
   const cur = form ? form.exeSelection : '';
   sel.textContent = '';
   const o0 = document.createElement('option');
-  o0.value = ''; o0.textContent = '默认（托管基线 b10488）';
+  o0.value = '';
+  const hasBaseline = installed.some((v) => v.tag === 'b10488' && v.valid !== false);
+  o0.textContent = hasBaseline ? '默认（托管基线 b10488）' : '默认（托管基线 b10488，未安装）';
   sel.appendChild(o0);
   for (const v of installed) {
     const o = document.createElement('option');
