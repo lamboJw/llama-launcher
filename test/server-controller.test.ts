@@ -2,6 +2,9 @@
 // 测试替身：fake-server.mjs（真实 spawn，node 二进制充当 llama-server）
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { fileURLToPath } from 'node:url';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { ProcessManager, isPortFree, type ExitInfo } from '../src/main/process-manager.js';
 import { ServerController, type StartRequest } from '../src/main/server-controller.js';
 import { DEFAULT_FORM } from '../src/main/config.js';
@@ -82,6 +85,25 @@ describe('ServerController', () => {
     expect(exitInfo!.early).toBe(true); // 400ms < 10s
     expect(exitInfo!.stderr).toContain('error: invalid argument: --fake-flag');
     await c2.stop();
+  });
+
+  it('start with missing cudaDir → friendly error, no spawn', async () => {
+    const c3 = new ServerController(new ProcessManager(), {}, 3000);
+    const r3 = { ...req('fake-model'), cudaDir: 'F:/definitely-missing-cuda-dir-xyz' };
+    await expect(c3.start(r3)).rejects.toThrow(/CUDA 运行时目录/);
+    expect(c3.getState().status).toBe('stopped');
+  });
+
+  it('start with cudaDir lacking cudart dll → friendly error, no spawn', async () => {
+    const dir = path.join(os.tmpdir(), 'llama-launcher-cuda-test-' + Date.now());
+    fs.mkdirSync(dir);
+    try {
+      const c4 = new ServerController(new ProcessManager(), {}, 3000);
+      const r4 = { ...req('fake-model'), cudaDir: dir };
+      await expect(c4.start(r4)).rejects.toThrow(/cudart64_/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('start failure (health timeout) → stopped, error thrown', async () => {

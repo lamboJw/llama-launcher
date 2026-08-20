@@ -1,10 +1,24 @@
 // server-controller.ts — llama-server 生命周期与模型切换编排（规格 §2.2/§2.3/§5.4）
 // 纯 Node（ProcessManager 注入），fake-server.mjs 可单测；实现代理的 SwitchController 接口
 import path from 'node:path';
+import * as fs from 'node:fs';
 import { buildArgs } from './args.js';
 import { probeFreePort, ProcessManager, type ExitInfo } from './process-manager.js';
 import type { SwitchController } from './proxy.js';
 import type { FormValues, ModelRef, ServerState, SwitchState } from '../shared/types.js';
+
+/** CUDA 运行时目录预检（Windows 上依赖 PATH/工作目录解析 cudart；失败时给出可操作的中文提示） */
+function checkCudaDir(dir: string): string | null {
+  let isDir = false;
+  try { isDir = fs.statSync(dir).isDirectory(); } catch { isDir = false; }
+  if (!isDir) return `CUDA 运行时目录不存在：${dir}（请先在设置区「检查更新 / 立即更新」下载 CUDA DLLs，或改用不含 CUDA 的版本）`;
+  let files: string[] = [];
+  try { files = fs.readdirSync(dir); } catch { files = []; }
+  if (!files.some((f) => /^cudart64_.*\.dll$/i.test(f))) {
+    return `CUDA 运行时目录中未找到 cudart64_*.dll：${dir}（CUDA DLLs 未下载完整，请重新「立即更新」）`;
+  }
+  return null;
+}
 
 export interface StartRequest {
   exe: string;
@@ -76,11 +90,17 @@ export class ServerController implements SwitchController {
       this.port = port;
       const built = buildArgs(req.form, req.model, port);
       const env: Record<string, string> = { ...built.env, ...(req.extraEnv ? req.extraEnv(port) : {}) };
-      if (req.cudaDir) env.PATH = `${req.cudaDir}${path.delimiter}${process.env.PATH ?? ''}`;
+      if (req.cudaDir) {
+        const cudaErr = checkCudaDir(req.cudaDir);
+        if (cudaErr) throw new Error(cudaErr);
+        env.PATH = `${req.cudaDir}${path.delimiter}${process.env.PATH ?? ''}`;
+        this.events.onLog?.(`[launcher] CUDA 运行时目录：${req.cudaDir}（已加入子进程 PATH，并设为子进程工作目录）`);
+      }
       await this.pm.start({
         exe: req.exe,
         argv: [...(req.extraArgvPrefix ?? []), ...built.argv],
         env,
+        cwd: req.cudaDir ?? undefined,
         port,
         onLine: (line) => this.events.onLog?.(line),
         onExit: (info) => this.handleExit(info),

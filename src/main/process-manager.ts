@@ -10,6 +10,7 @@ export interface StartOptions {
   exe: string;
   argv: string[];
   env: Record<string, string>;
+  cwd?: string;
   port: number;
   onLine: (line: string) => void;
   onExit: (info: ExitInfo) => void;
@@ -62,6 +63,7 @@ export class ProcessManager {
     const proc = spawn(opts.exe, opts.argv, {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, ...opts.env },
+      cwd: opts.cwd,
       windowsHide: true,
     });
     this.proc = proc;
