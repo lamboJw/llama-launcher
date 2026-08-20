@@ -115,7 +115,7 @@ const GROUPS: { title: string; fields: FieldSpec[] }[] = [
     { id: 'specDraftTypeV', label: 'draft V 缓存类型 (spec-draft-type-v)', type: 'text' },
   ]},
   { title: '高级', fields: [
-    { id: 'verbosity', label: '日志详细程度', type: 'select', options: [['', '默认'], ['0', '0'], ['1', '1'], ['2', '2']] },
+    { id: 'verbosity', label: '日志详细程度', type: 'select', options: [['', '默认(3=INFO)'], ['0', '0（generic output）'], ['1', '1（error）'], ['2', '2（warning）'], ['3', '3（INFO）'], ['4', '4（TRACE）'], ['5', '5（DEBUG）']] },
     { id: 'warmup', label: 'warmup 运行', type: 'checkbox' },
     { id: 'contextShift', label: 'context shift', type: 'checkbox' },
     { id: 'cacheReuse', label: 'KV 缓存复用 (cache-reuse N)', type: 'text' },

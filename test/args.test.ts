@@ -141,6 +141,12 @@ describe('buildArgs', () => {
     expect(hasPair(argv, '--spec-draft-type-v', 'q4_0')).toBe(true);
   });
 
+  it('verbosity 支持 0-5（3=INFO 默认，4=TRACE，5=DEBUG）', () => {
+    expect(hasPair(buildArgs({ ...BASE, verbosity: '5' }, LOCAL, 59999).argv, '--verbosity', '5')).toBe(true);
+    expect(hasPair(buildArgs({ ...BASE, verbosity: '4' }, LOCAL, 59999).argv, '--verbosity', '4')).toBe(true);
+    expect(buildArgs(BASE, LOCAL, 59999).argv).not.toContain('--verbosity');
+  });
+
   it('extraArgs shlex appended last, mapped to extraArgs', () => {
     const { argv, argToField } = buildArgs({ ...BASE, extraArgs: '--foo bar --baz "a b"' }, LOCAL, 59999);
     const i = argv.indexOf('--foo');
