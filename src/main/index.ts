@@ -153,7 +153,8 @@ function probeVersion(exe: string): Promise<ParsedVersion> {
 async function refreshUnion(): Promise<void> {
   const form = config.getSettings().form;
   try { localModels = form.scanDir ? scanModels(form.scanDir) : []; } catch { localModels = []; }
-  try { hfModels = form.autoSwitch && form.hfCacheDir ? scanHfCache(form.hfCacheDir) : []; } catch { hfModels = []; }
+  // HF 扫描不依赖 autoSwitch（纯本地磁盘操作）；autoSwitch 只控制代理按请求切模型（proxy.ts）
+  try { hfModels = form.hfCacheDir ? scanHfCache(form.hfCacheDir) : []; } catch { hfModels = []; }
   ctl.setUnion(buildModelUnion(localModels, hfModels));
   send('models:changed', ctl.union()); // 扫描结果实时推给渲染层（模型下拉刷新）
 }

@@ -6445,3 +6445,12 @@ git add -A && git commit -m "package: electron-builder dir + portable zip script
 - 14 测试套件 / 123 测试全绿；typecheck + build + package 通过。
 - 便携 zip：`release/llama-launcher-0.1.0-portable-win32-x64.zip`（140.8 MB，解压即用，冒烟通过）。
 - 全部提交已推送 origin/main（github.com:lamboJw/llama-launcher）。
+
+### 交付后修正（2026-08-20，均已推送）
+
+- **模型下拉实时刷新**：主进程重扫后新增 `models:changed` 事件，渲染层即时重建下拉并保留选中（此前需重启才生效）。
+- **设置自动保存可见化**：改设置 600ms 防抖自动保存（本就不需要手动存），新增「设置已自动保存 HH:MM:SS」提示；「保存」按钮更名「保存参数组」并给出明确引导文案（顶部选模型后才可存参数组）。
+- **HF 缓存扫描取消 autoSwitch 门槛（偏差）**：原实现 `autoSwitch && hfCacheDir` 才扫 HF 缓存，导致只填路径不勾选时看不到缓存模型。现改为设置 hfCacheDir 即扫描（纯本地磁盘操作）；autoSwitch 语义不变——仍只控制代理按 API 请求的 model 字段自动切换（proxy.ts）。
+- **自定义 exe 自动注入托管 CUDA 目录**：`StartRequest.fallbackCudaDirs`（尽力而为，缺失不报错）；`findManagedCudaDirs` 扫描 `llama.cpp/cuda/cuda-*` 中含 cudart64_*.dll 的目录（版本降序全部注入）。
+- **CUDA 目录 spawn 前预检 + cwd 双保险**：`checkCudaDir` 对托管 CUDA 目录严格校验（缺失/无 cudart → 中文报错，不再弹系统对话框）；实测确认 Windows 上 PATH 前置注入与 cwd 均能解析 cudart（`--list-devices` 场景 A/B/C）。
+- **zip-release 抗锁**：`release/llama-launcher/` 被运行中实例占用时不再崩溃（rename/rm 容错，回退 adm-zip 在 zip 内重根）。
