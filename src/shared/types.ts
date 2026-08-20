@@ -16,6 +16,7 @@ export interface HfModel {
   quants: string[];        // 可用量化（大写，如 Q4_K_M）
   quant: string | null;    // 默认量化：有 Q4_K_M 用之，否则第一个（与 llama.cpp 一致）
   mmproj: boolean;         // snapshot 内是否有 mmproj.*.gguf
+  localPath?: string;      // 启动用 gguf 绝对路径（按 quant 选具体文件；绕过 llama.cpp refs/snapshot 严格解析）
 }
 
 export interface ModelRef {

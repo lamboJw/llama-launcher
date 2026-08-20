@@ -80,7 +80,15 @@ export function scanHfCache(hfDir: string): HfModel[] {
     const quant = quants.includes('Q4_K_M') ? 'Q4_K_M' : (quants[0] ?? null);
     const size = files.reduce((s, f) => s + fs.statSync(path.join(snap, f)).size, 0);
     const mmproj = files.some(f => /mmproj/i.test(f));
-    out.push({ repo, path: snap, size, quants, quant, mmproj });
+    // 启动用具体文件：按默认量化选（与 llama.cpp 的 repo:QUANT 语义一致），无匹配 → 第一个 gguf
+    const sorted = [...ggufs].sort();
+    let localPath: string | undefined;
+    if (quant) {
+      const hit = sorted.find((f) => extractQuant(f) === quant);
+      if (hit) localPath = path.join(snap, hit);
+    }
+    if (!localPath && sorted.length > 0) localPath = path.join(snap, sorted[0]);
+    out.push({ repo, path: snap, size, quants, quant, mmproj, localPath });
   }
   out.sort((a, b) => a.repo.localeCompare(b.repo));
   return out;

@@ -169,6 +169,17 @@ async function startServer(form: FormValues, model: ModelRef): Promise<void> {
     throw new Error(`可见端口 ${form.visiblePort} 已被占用，请在"服务"组更换端口`);
   }
   const { exe, cudaDir, fallbackCudaDirs } = resolveExe(form);
+  // HF 缓存模型：localPath 缺失或快照文件被删 → 重新扫描刷新（refs/snapshot 可能变化）
+  if (model.source === 'hf' && model.hf) {
+    const lp = model.hf.localPath;
+    if (!lp || !fs.existsSync(lp)) {
+      try {
+        const fresh = form.hfCacheDir ? scanHfCache(form.hfCacheDir) : [];
+        const hit = fresh.find((h) => h.repo.toLowerCase() === model.hf!.repo.toLowerCase());
+        if (hit) model = { ...model, hf: hit };
+      } catch { /* 扫描失败 → 沿用原 model */ }
+    }
+  }
   // 启动即保存 profile（规格 §5.1）
   const key = model.local ? model.local.path : model.name;
   await profiles.save(key, form);

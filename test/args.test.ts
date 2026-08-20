@@ -86,6 +86,15 @@ describe('buildArgs', () => {
     expect(argv).not.toContain('--model');
   });
 
+  it('hf source 带本地快照路径（localPath）→ --model，不再走 --hf-repo/--offline', () => {
+    const model: ModelRef = { name: 'u/n', source: 'hf', hf: { ...HF.hf!, localPath: 'C:/hf/snapshots/abc/m.gguf' } };
+    const { argv, env } = buildArgs(BASE, model, 59999);
+    expect(hasPair(argv, '--model', 'C:/hf/snapshots/abc/m.gguf')).toBe(true);
+    expect(argv).not.toContain('--hf-repo');
+    expect(argv).not.toContain('--offline');
+    expect(env).toEqual({});
+  });
+
   it('hf source without default quant -> bare repo name', () => {
     const model: ModelRef = { name: 'u/n', source: 'hf', hf: { ...HF.hf!, quant: null } };
     const { argv } = buildArgs(BASE, model, 59999);

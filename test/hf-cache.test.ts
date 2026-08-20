@@ -98,6 +98,8 @@ describe('scanHfCache', () => {
     expect(m.mmproj).toBe(true);
     expect(m.size).toBe(12); // 3 x 4 bytes
     expect(m.path).toBe(path.join(root, 'models--ggml-org--GLM-4.7-Flash-GGUF', 'snapshots', COMMIT));
+    // localPath：按默认量化 Q4_K_M 选具体 gguf（mmproj 不算）
+    expect(m.localPath).toBe(path.join(root, 'models--ggml-org--GLM-4.7-Flash-GGUF', 'snapshots', COMMIT, 'GLM-4.7-Flash-GGUF-Q4_K_M.gguf'));
   });
 
   it('no recognizable quant -> quant null (llama.cpp falls back to first file)', () => {
@@ -105,6 +107,8 @@ describe('scanHfCache', () => {
     expect(m.quants).toEqual([]);
     expect(m.quant).toBeNull();
     expect(m.mmproj).toBe(false);
+    // 无量化可识别 → localPath 取第一个 gguf
+    expect(m.localPath).toBe(path.join(root, 'models--user--NoQuant', 'snapshots', COMMIT, 'model.gguf'));
   });
 
   it('refs/snapshots mismatch → falls back to any snapshot with gguf', () => {

@@ -69,11 +69,18 @@ export function buildArgs(form: FormValues, model: ModelRef, internalPort: numbe
     argToField['--model'] = 'modelFile';
   } else {
     if (!model.hf) throw new Error('hf model ref missing repo');
-    const repo = model.hf.quant ? `${model.hf.repo}:${model.hf.quant}` : model.hf.repo;
-    argv.push('--hf-repo', repo, '--offline');
-    argToField['--hf-repo'] = 'modelFile';
-    argToField['--offline'] = 'modelFile';
-    if (form.hfCacheDir.trim() !== '') env.HF_HUB_CACHE = form.hfCacheDir.trim();
+    if (model.hf.localPath && model.hf.localPath.trim() !== '') {
+      // 缓存模型：直接传本地快照路径（llama.cpp 的 --hf-repo 解析严格要求
+      // snapshots/<refs提交>/ 存在，refs 与快照目录不匹配时得到空路径 → 启动崩）
+      argv.push('--model', model.hf.localPath);
+      argToField['--model'] = 'modelFile';
+    } else {
+      const repo = model.hf.quant ? `${model.hf.repo}:${model.hf.quant}` : model.hf.repo;
+      argv.push('--hf-repo', repo, '--offline');
+      argToField['--hf-repo'] = 'modelFile';
+      argToField['--offline'] = 'modelFile';
+      if (form.hfCacheDir.trim() !== '') env.HF_HUB_CACHE = form.hfCacheDir.trim();
+    }
   }
 
   // 模型组

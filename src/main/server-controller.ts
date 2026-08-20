@@ -7,6 +7,11 @@ import { probeFreePort, ProcessManager, type ExitInfo } from './process-manager.
 import type { SwitchController } from './proxy.js';
 import type { FormValues, ModelRef, ServerState, SwitchState } from '../shared/types.js';
 
+/** 日志用参数引用：含空白/引号才加双引号（Windows cmd 风格转义） */
+function quoteArg(s: string): string {
+  return /\s|"/.test(s) ? `"${s.replace(/"/g, '\\"')}"` : s;
+}
+
 /** CUDA 运行时目录预检（Windows 上依赖 PATH/工作目录解析 cudart；失败时给出可操作的中文提示） */
 function checkCudaDir(dir: string): string | null {
   let isDir = false;
@@ -101,6 +106,7 @@ export class ServerController implements SwitchController {
         env.PATH = `${req.fallbackCudaDirs.join(path.delimiter)}${path.delimiter}${process.env.PATH ?? ''}`;
         this.events.onLog?.(`[launcher] 自定义 exe：自动注入托管 CUDA 目录 ${req.fallbackCudaDirs.join(', ')} 到 PATH（尽力而为）`);
       }
+      this.events.onLog?.(`[launcher] 命令行：${[req.exe, ...(req.extraArgvPrefix ?? []), ...built.argv].map(quoteArg).join(' ')}`);
       await this.pm.start({
         exe: req.exe,
         argv: [...(req.extraArgvPrefix ?? []), ...built.argv],

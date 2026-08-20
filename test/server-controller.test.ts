@@ -87,6 +87,20 @@ describe('ServerController', () => {
     await c2.stop();
   });
 
+  it('启动日志附完整命令行（exe + 全部参数）', async () => {
+    const logs: string[] = [];
+    const c2 = new ServerController(new ProcessManager(), { onLog: (l) => logs.push(l) }, 3000);
+    await c2.start(req('fake-model'));
+    const cl = logs.find((l) => l.startsWith('[launcher] 命令行：'));
+    expect(cl).toBeTruthy();
+    expect(cl).toContain(process.execPath);
+    expect(cl).toContain(FAKE);
+    expect(cl).toContain('--port');
+    expect(cl).toContain('--fake-flag');
+    expect(cl).toContain('--model');
+    await c2.stop();
+  });
+
   it('start with missing cudaDir → friendly error, no spawn', async () => {
     const c3 = new ServerController(new ProcessManager(), {}, 3000);
     const r3 = { ...req('fake-model'), cudaDir: 'F:/definitely-missing-cuda-dir-xyz' };
