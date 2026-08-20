@@ -1,6 +1,7 @@
 // index.ts — Electron 主进程：窗口 / IPC / 启动编排（规格 §2/§3/§5/§9/§10）
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import path from 'node:path';
+import * as fs from 'node:fs';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { AppConfig, defaultConfigDir } from './config.js';
@@ -96,19 +97,48 @@ function managedPath(entry: InstalledVersion): { exe: string; cudaDir: string | 
   return { exe, cudaDir };
 }
 
-function resolveExe(form: FormValues): { exe: string; cudaDir: string | null } {
+/** 数字版本比较（高版本在前），用于 CUDA 目录排序 */
+function compareVersions(a: string, b: string): number {
+  const pa = a.split('.').map((x) => parseInt(x, 10) || 0);
+  const pb = b.split('.').map((x) => parseInt(x, 10) || 0);
+  const n = Math.max(pa.length, pb.length);
+  for (let i = 0; i < n; i++) {
+    const da = pa[i] ?? 0;
+    const db = pb[i] ?? 0;
+    if (da !== db) return db - da;
+  }
+  return 0;
+}
+
+/** 扫描托管 CUDA 目录（llama.cpp/cuda/cuda-*），返回含 cudart64_*.dll 的目录（新版本在前） */
+function findManagedCudaDirs(): string[] {
+  const base = path.join(llamaBaseDir(), 'cuda');
+  let entries: string[] = [];
+  try { entries = fs.readdirSync(base); } catch { return []; }
+  const result: string[] = [];
+  for (const d of entries.filter((e) => /^cuda-\d/.test(e)).sort((a, b) => compareVersions(a.slice(5), b.slice(5)))) {
+    const full = path.join(base, d);
+    try {
+      if (fs.readdirSync(full).some((f) => /^cudart64_.*\.dll$/i.test(f))) result.push(full);
+    } catch { /* 目录不可读则跳过 */ }
+  }
+  return result;
+}
+
+function resolveExe(form: FormValues): { exe: string; cudaDir: string | null; fallbackCudaDirs: string[] } {
   const sel = form.exeSelection.trim();
   if (sel === '') {
     const entry = installed.find((v) => v.tag === `b${BASELINE_BUILD}` && v.valid !== false);
-    if (entry) return managedPath(entry);
+    if (entry) return { ...managedPath(entry), fallbackCudaDirs: [] };
     throw new Error('请在设置区选择 llama.cpp 版本（托管版本或自定义路径）');
   }
   if (/^b\d+$/.test(sel)) {
     const entry = installed.find((v) => v.tag === sel);
     if (!entry) throw new Error(`托管版本 ${sel} 未安装（点"立即更新"安装）`);
-    return managedPath(entry);
+    return { ...managedPath(entry), fallbackCudaDirs: [] };
   }
-  return { exe: sel, cudaDir: null }; // 自定义路径
+  // 自定义路径：托管 CUDA 目录存在则作为兜底注入（尽力而为）
+  return { exe: sel, cudaDir: null, fallbackCudaDirs: findManagedCudaDirs() };
 }
 
 function probeVersion(exe: string): Promise<ParsedVersion> {
@@ -136,7 +166,7 @@ async function startServer(form: FormValues, model: ModelRef): Promise<void> {
   if (!(await isPortFree(form.visiblePort))) {
     throw new Error(`可见端口 ${form.visiblePort} 已被占用，请在"服务"组更换端口`);
   }
-  const { exe, cudaDir } = resolveExe(form);
+  const { exe, cudaDir, fallbackCudaDirs } = resolveExe(form);
   // 启动即保存 profile（规格 §5.1）
   const key = model.local ? model.local.path : model.name;
   await profiles.save(key, form);
@@ -146,7 +176,7 @@ async function startServer(form: FormValues, model: ModelRef): Promise<void> {
   versionMsg = versionBanner(versionInfo);
   refreshBanner();
   // 起 server（spawn → /health 就绪）
-  await ctl.start({ exe, form, model, cudaDir });
+  await ctl.start({ exe, form, model, cudaDir, fallbackCudaDirs });
   // 起 / 重建反向代理（规格 §2.1）
   if (proxy) { await proxy.stop(); proxy = null; }
   records = form.recordRounds ? new RecordsStore(recordsDir, { maxTotalBytes: form.recordsMaxTotalBytes }) : null;

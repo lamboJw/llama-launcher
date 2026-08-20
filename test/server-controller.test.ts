@@ -106,6 +106,34 @@ describe('ServerController', () => {
     }
   });
 
+  it('start with fallbackCudaDirs → injects into child PATH (best-effort)', async () => {
+    const dir = path.join(os.tmpdir(), 'llama-launcher-fallback-' + Date.now());
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'cudart64_13.dll'), '');
+    const logs: string[] = [];
+    const c5 = new ServerController(new ProcessManager(), { onLog: (l) => logs.push(l) }, 3000);
+    try {
+      const r5 = { ...req('fake-model', { FAKE_DUMP_ENV: '1' }), fallbackCudaDirs: [dir] };
+      await c5.start(r5);
+      expect(c5.getState().status).toBe('running');
+      const dumped = logs.find((l) => l.startsWith('FAKE_PATH='));
+      expect(dumped).toBeTruthy();
+      expect(dumped!).toContain(dir);
+      expect(logs.some((l) => l.includes('自定义 exe') && l.includes(dir))).toBe(true);
+    } finally {
+      await c5.stop();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('start with missing fallbackCudaDirs → best-effort, no error', async () => {
+    const c6 = new ServerController(new ProcessManager(), {}, 3000);
+    const r6 = { ...req('fake-model'), fallbackCudaDirs: ['F:/definitely-missing-cuda-dir-xyz'] };
+    await expect(c6.start(r6)).resolves.toBeUndefined();
+    expect(c6.getState().status).toBe('running');
+    await c6.stop();
+  });
+
   it('start failure (health timeout) → stopped, error thrown', async () => {
     await expect(ctl.start(req('fake-model', { FAKE_HEALTH_DELAY_MS: '10000' }))).rejects.toThrow(/health check timed out/);
     expect(ctl.getState().status).toBe('stopped');

@@ -2,6 +2,10 @@
 // 环境变量：FAKE_PORT、FAKE_HEALTH_DELAY_MS、FAKE_CRASH_MS、FAKE_CRASH_MSG、FAKE_IGNORE_SIGTERM
 import http from 'node:http';
 
+if (process.env.FAKE_DUMP_ENV === '1') {
+  console.log(`FAKE_PATH=${process.env.PATH ?? ''}`);
+}
+
 const port = Number(process.env.FAKE_PORT || '59900');
 const readyAt = Date.now() + Number(process.env.FAKE_HEALTH_DELAY_MS || '0');
 

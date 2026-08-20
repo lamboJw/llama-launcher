@@ -26,6 +26,8 @@ export interface StartRequest {
   model: ModelRef;
   /** 托管 CUDA 目录（加入子进程 PATH 前置）；自定义 exe 传 null（规格 §9.2） */
   cudaDir: string | null;
+  /** 自定义 exe 的兜底托管 CUDA 目录（尽力而为：存在即注入 PATH，缺失不报错） */
+  fallbackCudaDirs?: string[];
   /** 测试注入：按探测端口追加环境变量（如 FAKE_PORT）；应用端不用 */
   extraEnv?: (port: number) => Record<string, string>;
   /** 测试注入：argv 前缀（如 fake-server 脚本路径）；应用端不用 */
@@ -95,6 +97,9 @@ export class ServerController implements SwitchController {
         if (cudaErr) throw new Error(cudaErr);
         env.PATH = `${req.cudaDir}${path.delimiter}${process.env.PATH ?? ''}`;
         this.events.onLog?.(`[launcher] CUDA 运行时目录：${req.cudaDir}（已加入子进程 PATH，并设为子进程工作目录）`);
+      } else if (req.fallbackCudaDirs?.length) {
+        env.PATH = `${req.fallbackCudaDirs.join(path.delimiter)}${path.delimiter}${process.env.PATH ?? ''}`;
+        this.events.onLog?.(`[launcher] 自定义 exe：自动注入托管 CUDA 目录 ${req.fallbackCudaDirs.join(', ')} 到 PATH（尽力而为）`);
       }
       await this.pm.start({
         exe: req.exe,
