@@ -18,7 +18,7 @@ export const DEFAULT_FORM: FormValues = {
   corsOrigins: '', corsMethods: '', corsHeaders: '', corsCredentials: false,
   // 硬件组
   nGpuLayers: '', threads: '', threadsBatch: '', splitMode: '',
-  device: '', loadMode: '', fit: true,
+  device: '', loadMode: '', fit: '', tensorSplit: '',
   cacheTypeK: '', cacheTypeV: '', nCpuMoE: '',
   // 上下文组
   ctxSize: '', parallel: '', batchSize: '', ubatchSize: '',
@@ -32,9 +32,10 @@ export const DEFAULT_FORM: FormValues = {
   specType: '', specDraftModel: '', specDraftHf: '',
   specDraftNMax: '', specDraftNMin: '', specDraftNgl: '',
   specDraftThreads: '', specDraftPSplit: '', specDraftPMin: '',
+  specDraftTypeK: '', specDraftTypeV: '',
   specDefault: false,
   // 高级组
-  verbosity: '', warmup: true, contextShift: false, cacheReuse: false,
+  verbosity: '', warmup: true, contextShift: false, cacheReuse: '',
   perf: false, logPromptsDir: '', mcpServersConfig: '',
   mtmdBatchMaxTokens: '', specDraftBackendSampling: false, extraArgs: '',
   // App 级
@@ -81,11 +82,31 @@ export function defaultConfigDir(): string {
   return path.join(appdata, 'llama-launcher');
 }
 
+/**
+ * 旧版配置迁移：
+ * - fit：复选框布尔 → 字符串（true→'on'，false→'off'；llama-server --fit [on|off] 必须带值）
+ * - cacheReuse：复选框布尔 → 字符串（--cache-reuse N 必须带数字；布尔无法忠实表达 → 置空=off）
+ * 新字段缺失 → 补默认空串
+ */
+export function migrateForm(f: FormValues): FormValues {
+  const o: FormValues = { ...f };
+  const any = o as unknown as Record<string, unknown>;
+  if (typeof any.fit === 'boolean') any.fit = (any.fit as boolean) ? 'on' : 'off';
+  if (typeof any.cacheReuse === 'boolean') any.cacheReuse = '';
+  for (const k of ['tensorSplit', 'specDraftTypeK', 'specDraftTypeV'] as const) {
+    if (typeof any[k] !== 'string') any[k] = '';
+  }
+  return o;
+}
+
 export class AppConfig {
   private store: JsonStore<Settings>;
 
   constructor(dir?: string) {
     this.store = new JsonStore<Settings>(dir ?? defaultConfigDir(), 'config', { form: { ...DEFAULT_FORM } });
+    const cur = this.store.get().form;
+    const fixed = migrateForm(cur);
+    if (JSON.stringify(fixed) !== JSON.stringify(cur)) this.store.set({ form: fixed });
   }
 
   getSettings(): Settings { return this.store.get(); }

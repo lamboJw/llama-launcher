@@ -36,7 +36,7 @@ export interface FormValues {
   corsOrigins: string; corsMethods: string; corsHeaders: string; corsCredentials: boolean;
   // 硬件组
   nGpuLayers: string; threads: string; threadsBatch: string; splitMode: string;
-  device: string; loadMode: string; fit: boolean;
+  device: string; loadMode: string; fit: string; tensorSplit: string;
   cacheTypeK: string; cacheTypeV: string; nCpuMoE: string;
   // 上下文组
   ctxSize: string; parallel: string; batchSize: string; ubatchSize: string;
@@ -50,9 +50,10 @@ export interface FormValues {
   specType: string; specDraftModel: string; specDraftHf: string;
   specDraftNMax: string; specDraftNMin: string; specDraftNgl: string;
   specDraftThreads: string; specDraftPSplit: string; specDraftPMin: string;
+  specDraftTypeK: string; specDraftTypeV: string;
   specDefault: boolean;
   // 高级组
-  verbosity: string; warmup: boolean; contextShift: boolean; cacheReuse: boolean;
+  verbosity: string; warmup: boolean; contextShift: boolean; cacheReuse: string;
   perf: boolean; logPromptsDir: string; mcpServersConfig: string;
   mtmdBatchMaxTokens: string; specDraftBackendSampling: boolean; extraArgs: string;
   // App 级（非 server 参数）

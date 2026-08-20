@@ -16,7 +16,7 @@ const PARAMS: FormValues = {
   jinja: true, ui: true, ssePingInterval: '',
   corsOrigins: '', corsMethods: '', corsHeaders: '', corsCredentials: false,
   nGpuLayers: '99', threads: '', threadsBatch: '', splitMode: '',
-  device: '', loadMode: '', fit: true, cacheTypeK: '', cacheTypeV: '', nCpuMoE: '',
+  device: '', loadMode: '', fit: '', tensorSplit: '', cacheTypeK: '', cacheTypeV: '', nCpuMoE: '',
   ctxSize: '4096', parallel: '', batchSize: '', ubatchSize: '',
   cacheRam: '', flashAttn: '', swaFull: false,
   temperature: '', topK: '', topP: '', minP: '',
@@ -25,8 +25,8 @@ const PARAMS: FormValues = {
   reasoningEffort: '', reasoningPreserve: false,
   specType: '', specDraftModel: '', specDraftHf: '',
   specDraftNMax: '', specDraftNMin: '', specDraftNgl: '',
-  specDraftThreads: '', specDraftPSplit: '', specDraftPMin: '', specDefault: false,
-  verbosity: '', warmup: true, contextShift: false, cacheReuse: false,
+  specDraftThreads: '', specDraftPSplit: '', specDraftPMin: '', specDraftTypeK: '', specDraftTypeV: '', specDefault: false,
+  verbosity: '', warmup: true, contextShift: false, cacheReuse: '',
   perf: false, logPromptsDir: '', mcpServersConfig: '',
   mtmdBatchMaxTokens: '', specDraftBackendSampling: false, extraArgs: '--foo bar',
   autoSwitch: false, hfCacheDir: '', recordRounds: false,
@@ -69,5 +69,14 @@ describe('ProfilesStore', () => {
     await s.save('m1', PARAMS);
     await s.delete('m1');
     expect(await s.load('m1')).toBeNull();
+  });
+
+  it('旧档案（fit 布尔）加载时自动迁移为字符串', async () => {
+    await fs.mkdir(dir, { recursive: true });
+    const legacy = { model: 'old/model', params: { ...PARAMS, fit: true as never, cacheReuse: true as never }, savedAt: Date.now() };
+    await fs.writeFile(profileFileFor(dir, 'old/model'), JSON.stringify(legacy), 'utf8');
+    const p = await new ProfilesStore(dir).load('old/model');
+    expect(p!.params.fit).toBe('on');
+    expect(p!.params.cacheReuse).toBe('');
   });
 });

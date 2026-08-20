@@ -5,6 +5,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { FormValues, Profile } from '../shared/types.js';
+import { migrateForm } from './config.js';
 
 export function profileFileFor(dir: string, model: string): string {
   const hash = createHash('sha256').update(model).digest('hex').slice(0, 16);
@@ -33,7 +34,7 @@ export class ProfilesStore {
     try {
       const raw = await fs.readFile(profileFileFor(this.dir, model), 'utf8');
       const p: unknown = JSON.parse(raw);
-      return isProfile(p) ? p : null;
+      return isProfile(p) ? { ...p, params: migrateForm(p.params) } : null;
     } catch { return null; }
   }
 
@@ -50,7 +51,7 @@ export class ProfilesStore {
       if (!e.endsWith('.json')) continue;
       try {
         const p: unknown = JSON.parse(await fs.readFile(path.join(this.dir, e), 'utf8'));
-        if (isProfile(p)) out.push(p);
+        if (isProfile(p)) out.push({ ...p, params: migrateForm(p.params) });
       } catch { /* 损坏 → 忽略 */ }
     }
     out.sort((a, b) => b.savedAt - a.savedAt);

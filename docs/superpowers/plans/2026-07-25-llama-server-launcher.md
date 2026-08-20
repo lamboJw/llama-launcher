@@ -6455,3 +6455,12 @@ git add -A && git commit -m "package: electron-builder dir + portable zip script
 - **CUDA 目录 spawn 前预检 + cwd 双保险**：`checkCudaDir` 对托管 CUDA 目录严格校验（缺失/无 cudart → 中文报错，不再弹系统对话框）；实测确认 Windows 上 PATH 前置注入与 cwd 均能解析 cudart（`--list-devices` 场景 A/B/C）。
 - **zip-release 抗锁**：`release/llama-launcher/` 被运行中实例占用时不再崩溃（rename/rm 容错，回退 adm-zip 在 zip 内重根）。
 - **HF 快照回退（refs 与快照目录不匹配）**：实测用户缓存 `H:\models` 中 `unsloth/Qwen3.8-27B-GGUF` 的 `refs/main` 指向 `f1bfb127…` 而 `snapshots/` 实际目录为 `fe1e2a23…`（refs 更新但快照未同步），原实现严格要求 `snapshots/<refs提交>/` 存在导致该模型被跳过。现回退：refs 解析失败时扫描 `snapshots/` 下任意含 .gguf 的子目录；连带行为变化——refs 无效但快照含真实 gguf 的仓库（如 BadRef fixture）也会被列出（原测试期望已同步更新）。另：HF 扫描不再依赖 autoSwitch（见上一条）。
+- **参数组装对齐 b10488 真实 CLI（偏差，用户报告 --fit 吞参 bug 后全量审计）**：对照 b10488 --help 审计全部参数，实测 5 个 --no-* 变体均为 invalid argument。修复：
+  - --fit [on|off] 必须带值、无 --no-fit → fit 由复选框改为三态下拉（默认(不传)/on/off），旧配置布尔迁移 true→'on'/false→'off'；
+  - --swa-full / --ignore-eos / --spec-default 为纯开关（无 --no- 变体）→ 新增 onFlag() 助手：勾选才传 flag，未勾选不传（原 bool() 会输出非法 --no-*）；
+  - --cache-reuse N 必须带数字 → cacheReuse 由复选框改为文本框，旧配置布尔迁移置空（=off，llama 默认 0）；
+  - bool() 保留用于成对存在且已逐一验证的参数：mmproj-auto、mmproj-offload、jinja、ui、warmup、context-shift、perf、reasoning-preserve、spec-draft-backend-sampling。
+- **GPU 参数扩充**：splitMode 选项补 tensor；新增 tensorSplit → --tensor-split（每 GPU 分配比例，如 50,50）。
+- **MTP draft KV 量化**：新增 specDraftTypeK / specDraftTypeV → --spec-draft-type-k/v（允许 f32/f16/bf16/q8_0/q4_0/q4_1/iq4_nl/q5_0/q5_1，llama 默认 f16）。
+- **配置/档案迁移机制**：config.ts 导出 migrateForm()（AppConfig 构造时迁移并写回落盘配置）；profiles.ts load/list 时对旧档案 params 执行 migrateForm（旧布尔 fit/cacheReuse 不会污染新 UI）。
+- **mmproj offload 行为确认（无代码改动）**：恒显式输出——勾选 --mmproj-offload（mmproj 放 GPU），不勾选 --no-mmproj-offload（mmproj 放 CPU 内存）；两参数在 b10488 均存在。--fit 修复前默认表单每次启动必崩（fit=true → 裸 --fit 吞下一个参数），本次审计一并排掉后续 4 个同类雷。test/args.test.ts 新增 7 项（fit 带值/吞参回归/纯开关/cacheReuse 数字/tensor-split/draft-type-kv）、test/config.test.ts +3（migrateForm）、test/profiles.test.ts +1（旧档案迁移），14 套件 138 测试全绿。--no-swa-full 等 5 个非法变体已实证（error: invalid argument）并纳入回归断言。release/llama-launcher/ 被运行中实例占用时改走 staging 输出 + adm-zip 重打包（asar 已验证含新参数）。

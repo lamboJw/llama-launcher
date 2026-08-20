@@ -9,7 +9,7 @@ const BASE: FormValues = {
   jinja: true, ui: true, ssePingInterval: '',
   corsOrigins: '', corsMethods: '', corsHeaders: '', corsCredentials: false,
   nGpuLayers: '', threads: '', threadsBatch: '', splitMode: '',
-  device: '', loadMode: '', fit: true, cacheTypeK: '', cacheTypeV: '', nCpuMoE: '',
+  device: '', loadMode: '', fit: '', tensorSplit: '', cacheTypeK: '', cacheTypeV: '', nCpuMoE: '',
   ctxSize: '', parallel: '', batchSize: '', ubatchSize: '',
   cacheRam: '', flashAttn: '', swaFull: false,
   temperature: '', topK: '', topP: '', minP: '',
@@ -18,8 +18,8 @@ const BASE: FormValues = {
   reasoningEffort: '', reasoningPreserve: false,
   specType: '', specDraftModel: '', specDraftHf: '',
   specDraftNMax: '', specDraftNMin: '', specDraftNgl: '',
-  specDraftThreads: '', specDraftPSplit: '', specDraftPMin: '', specDefault: false,
-  verbosity: '', warmup: true, contextShift: false, cacheReuse: false,
+  specDraftThreads: '', specDraftPSplit: '', specDraftPMin: '', specDraftTypeK: '', specDraftTypeV: '', specDefault: false,
+  verbosity: '', warmup: true, contextShift: false, cacheReuse: '',
   perf: false, logPromptsDir: '', mcpServersConfig: '',
   mtmdBatchMaxTokens: '', specDraftBackendSampling: false, extraArgs: '',
   autoSwitch: false, hfCacheDir: '', recordRounds: false,
@@ -54,7 +54,8 @@ describe('buildArgs', () => {
     expect(argv).toContain('--mmproj-auto');
     expect(argv).not.toContain('--no-mmproj-auto');
     expect(argv).toContain('--jinja');
-    expect(argv).toContain('--no-swa-full');
+    expect(argv).not.toContain('--swa-full');
+    expect(argv).not.toContain('--no-swa-full');
     expect(argv).toContain('--warmup');
     expect(argv).not.toContain('--no-warmup');
     expect(env).toEqual({});
@@ -95,6 +96,49 @@ describe('buildArgs', () => {
     const { argv } = buildArgs({ ...BASE, specType: 'none,draft-mtp' }, LOCAL, 59999);
     expect(hasPair(argv, '--spec-type', 'none')).toBe(true);
     expect(hasPair(argv, '--spec-type', 'draft-mtp')).toBe(true);
+  });
+
+  it('fit 是带值参数：on/off 带值传，空=不传（不再吞下一个 flag）', () => {
+    expect(hasPair(buildArgs({ ...BASE, fit: 'on' }, LOCAL, 59999).argv, '--fit', 'on')).toBe(true);
+    expect(hasPair(buildArgs({ ...BASE, fit: 'off' }, LOCAL, 59999).argv, '--fit', 'off')).toBe(true);
+    expect(buildArgs(BASE, LOCAL, 59999).argv).not.toContain('--fit');
+  });
+
+  it('带值参数后绝不紧跟另一个 flag（--fit 不再吞 --cache-type-k）', () => {
+    const { argv } = buildArgs({ ...BASE, fit: 'on', cacheTypeK: 'q8_0', cacheReuse: '128' }, LOCAL, 59999);
+    for (const f of ['--fit', '--cache-reuse']) {
+      const i = argv.indexOf(f);
+      expect(i).toBeGreaterThanOrEqual(0);
+      expect(argv[i + 1]?.startsWith('--')).not.toBe(true);
+    }
+  });
+
+  it('纯开关（b10488 无 --no- 变体）：未勾选不传任何东西，不产生非法 --no-*', () => {
+    const argv = buildArgs(BASE, LOCAL, 59999).argv;
+    for (const f of ['--swa-full', '--no-swa-full', '--ignore-eos', '--no-ignore-eos', '--spec-default', '--no-spec-default', '--no-cache-reuse', '--no-fit']) {
+      expect(argv).not.toContain(f);
+    }
+    const on = buildArgs({ ...BASE, swaFull: true, ignoreEos: true, specDefault: true }, LOCAL, 59999).argv;
+    expect(on).toContain('--swa-full');
+    expect(on).toContain('--ignore-eos');
+    expect(on).toContain('--spec-default');
+  });
+
+  it('cacheReuse 带数字（min chunk size）', () => {
+    expect(hasPair(buildArgs({ ...BASE, cacheReuse: '128' }, LOCAL, 59999).argv, '--cache-reuse', '128')).toBe(true);
+    expect(buildArgs(BASE, LOCAL, 59999).argv).not.toContain('--cache-reuse');
+  });
+
+  it('splitMode tensor + tensorSplit 每 GPU 分配', () => {
+    const { argv } = buildArgs({ ...BASE, splitMode: 'tensor', tensorSplit: '50,50' }, LOCAL, 59999);
+    expect(hasPair(argv, '--split-mode', 'tensor')).toBe(true);
+    expect(hasPair(argv, '--tensor-split', '50,50')).toBe(true);
+  });
+
+  it('MTP draft KV 量化：--spec-draft-type-k/v', () => {
+    const { argv } = buildArgs({ ...BASE, specDraftTypeK: 'q8_0', specDraftTypeV: 'q4_0' }, LOCAL, 59999);
+    expect(hasPair(argv, '--spec-draft-type-k', 'q8_0')).toBe(true);
+    expect(hasPair(argv, '--spec-draft-type-v', 'q4_0')).toBe(true);
   });
 
   it('extraArgs shlex appended last, mapped to extraArgs', () => {

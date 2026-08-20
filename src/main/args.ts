@@ -1,6 +1,8 @@
 // args.ts — llama-server 命令行组装（规格 §5 / §5.3）
-// 留空 = 不传；布尔恒显式 --flag / --no-flag；强制参数追加尾部；
-// 表单可见端口/--host/CORS 四件套只作用于代理层，绝不传给 server
+// 留空 = 不传；bool() 仅用于 b10488 中 --flag/--no-flag 成对存在的参数（恒显式）；
+// onFlag() 用于纯开关（无 --no- 变体，传了就是非法参数）：勾选才传；
+// 带值参数（--fit [on|off]、--cache-reuse N 等）一律走 str()，绝不允许裸传；
+// 强制参数追加尾部；表单可见端口/--host/CORS 四件套只作用于代理层，绝不传给 server
 import type { FormValues, ModelRef } from '../shared/types.js';
 
 export interface BuiltArgs {
@@ -51,6 +53,14 @@ export function buildArgs(form: FormValues, model: ModelRef, internalPort: numbe
       argToField[`--no-${flag.slice(2)}`] = field;
     }
   };
+  // 纯开关：b10488 无 --no- 变体（--swa-full / --ignore-eos / --spec-default），
+  // 未勾选传 --no-* 会直接 invalid argument
+  const onFlag = (field: keyof FormValues, flag: string): void => {
+    if (form[field] === true) {
+      argv.push(flag);
+      argToField[flag] = field;
+    }
+  };
 
   // 模型来源（规格 §5.3）
   if (model.source === 'local') {
@@ -87,9 +97,10 @@ export function buildArgs(form: FormValues, model: ModelRef, internalPort: numbe
   str('threads', '--threads');
   str('threadsBatch', '--threads-batch');
   str('splitMode', '--split-mode');
+  str('tensorSplit', '--tensor-split');
   str('device', '--device');
   str('loadMode', '--load-mode');
-  bool('fit', '--fit');
+  str('fit', '--fit');
   str('cacheTypeK', '--cache-type-k');
   str('cacheTypeV', '--cache-type-v');
   str('nCpuMoE', '--n-cpu-moe');
@@ -101,7 +112,7 @@ export function buildArgs(form: FormValues, model: ModelRef, internalPort: numbe
   str('ubatchSize', '--ubatch-size');
   str('cacheRam', '--cache-ram');
   str('flashAttn', '--flash-attn');
-  bool('swaFull', '--swa-full');
+  onFlag('swaFull', '--swa-full');
 
   // 采样组
   str('temperature', '--temperature');
@@ -113,7 +124,7 @@ export function buildArgs(form: FormValues, model: ModelRef, internalPort: numbe
   str('frequencyPenalty', '--frequency-penalty');
   str('repeatLastN', '--repeat-last-n');
   str('seed', '--seed');
-  bool('ignoreEos', '--ignore-eos');
+  onFlag('ignoreEos', '--ignore-eos');
   str('reasoningEffort', '--reasoning-effort');
   bool('reasoningPreserve', '--reasoning-preserve');
 
@@ -131,13 +142,15 @@ export function buildArgs(form: FormValues, model: ModelRef, internalPort: numbe
   str('specDraftThreads', '--spec-draft-threads');
   str('specDraftPSplit', '--spec-draft-p-split');
   str('specDraftPMin', '--spec-draft-p-min');
-  bool('specDefault', '--spec-default');
+  str('specDraftTypeK', '--spec-draft-type-k');
+  str('specDraftTypeV', '--spec-draft-type-v');
+  onFlag('specDefault', '--spec-default');
 
   // 高级组
   str('verbosity', '--verbosity');
   bool('warmup', '--warmup');
   bool('contextShift', '--context-shift');
-  bool('cacheReuse', '--cache-reuse');
+  str('cacheReuse', '--cache-reuse');
   bool('perf', '--perf');
   str('logPromptsDir', '--log-prompts-dir');
   str('mcpServersConfig', '--mcp-servers-config');
