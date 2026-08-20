@@ -155,6 +155,7 @@ async function refreshUnion(): Promise<void> {
   try { localModels = form.scanDir ? scanModels(form.scanDir) : []; } catch { localModels = []; }
   try { hfModels = form.autoSwitch && form.hfCacheDir ? scanHfCache(form.hfCacheDir) : []; } catch { hfModels = []; }
   ctl.setUnion(buildModelUnion(localModels, hfModels));
+  send('models:changed', ctl.union()); // 扫描结果实时推给渲染层（模型下拉刷新）
 }
 
 async function refreshInstalled(): Promise<void> {

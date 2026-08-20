@@ -333,7 +333,7 @@ function buildModelSelect(current: string | null): void {
   modelSelect.textContent = '';
   if (union.length === 0) {
     const o = document.createElement('option');
-    o.value = ''; o.textContent = '（无模型：请先扫描目录）';
+    o.value = ''; o.textContent = '（无模型：请设置模型扫描目录）';
     modelSelect.appendChild(o);
     return;
   }
@@ -621,6 +621,10 @@ function subscribeEvents(): void {
     const prog = $<HTMLProgressElement>('update-progress');
     prog.value = u.pct >= 0 ? u.pct : 0;
     $<HTMLDivElement>('update-msg').textContent = u.mbps > 0 ? `${u.message}（${u.mbps.toFixed(1)} MB/s）` : u.message;
+  });
+  window.llama.on('models:changed', (p) => {
+    union = p as ModelRef[];
+    buildModelSelect(modelSelect.value);
   });
   window.llama.on('exit:crash', (p) => {
     const e = p as ExitInfo;

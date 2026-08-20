@@ -1,7 +1,7 @@
 // preload/index.ts — contextBridge API（CJS 编译，规格 §3 顶栏/左栏/右栏全部交互）
 import { contextBridge, ipcRenderer } from 'electron';
 
-const EVENTS = ['state:change', 'log:lines', 'switch:change', 'stats:request', 'stats:round', 'update:progress', 'banner:change', 'exit:crash'] as const;
+const EVENTS = ['state:change', 'log:lines', 'switch:change', 'stats:request', 'stats:round', 'update:progress', 'banner:change', 'exit:crash', 'models:changed'] as const;
 
 contextBridge.exposeInMainWorld('llama', {
   boot: (): Promise<unknown> => ipcRenderer.invoke('app:boot'),
