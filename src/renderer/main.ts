@@ -442,9 +442,14 @@ async function refreshProfiles(): Promise<void> {
   for (const p of list) {
     const o = document.createElement('option');
     o.value = p.model;
-    o.textContent = `${p.model}  ${new Date(p.savedAt).toLocaleString()}`;
+    const date = new Date(p.savedAt).toLocaleString();
+    // 本地模型的 key 是 gguf 全路径：显示缩短为文件名（防撑宽下拉），完整路径进 title
+    const short = p.model.split(/[\\/]/).pop() ?? p.model;
+    o.textContent = `${short}  ${date}`;
+    o.title = `${p.model}  ${date}`;
     sel.appendChild(o);
   }
+  sel.title = (sel.options[sel.selectedIndex]?.title as string | undefined) ?? '';
 }
 
 function currentModelKey(): string | null {
@@ -715,7 +720,10 @@ function wireButtons(): void {
       if (name === 'records') void loadRecords();
     });
   }
-  $<HTMLButtonElement>('btn-profile-apply').addEventListener('click', async () => {
+  $<HTMLSelectElement>('profile-select').addEventListener('change', function (this: HTMLSelectElement) {
+    this.title = (this.options[this.selectedIndex]?.title as string | undefined) ?? '';
+  });
+$<HTMLButtonElement>('btn-profile-apply').addEventListener('click', async () => {
     const key = $<HTMLSelectElement>('profile-select').value;
     if (!key || !form) return;
     const p = await window.llama.loadProfile(key);

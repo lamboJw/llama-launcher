@@ -21,7 +21,7 @@ select, input[type="text"], input[type="number"] { background: #1a1b1e; border: 
 #topbar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #25262b; border-bottom: 1px solid #33343a; flex-wrap: wrap; }
 #model-select { min-width: 260px; max-width: 420px; }
 #main { display: grid; grid-template-columns: 370px 1fr; height: calc(100vh - 47px); }
-#left { overflow-y: auto; border-right: 1px solid #33343a; padding: 8px; }
+#left { overflow-y: auto; overflow-x: hidden; border-right: 1px solid #33343a; padding: 8px; }
 #right { display: flex; flex-direction: column; min-width: 0; }
 #tabs { display: flex; gap: 3px; padding: 6px 8px 0; background: #25262b; border-bottom: 1px solid #33343a; }
 #tabs button { background: #2a2b31; color: #999; border: 1px solid #33343a; border-bottom: none; border-radius: 6px 6px 0 0; padding: 6px 16px; }
@@ -38,7 +38,8 @@ summary { cursor: pointer; padding: 4px 8px; background: #2a2b31; border-radius:
 .field input[type="checkbox"] { width: 15px; height: 15px; }
 .chk { display: inline-flex; gap: 5px; align-items: center; cursor: pointer; white-space: nowrap; }
 .row { display: flex; gap: 8px; margin-top: 6px; }
-#profile-bar { display: grid; grid-template-columns: 1fr auto; gap: 6px; padding: 6px 2px; border-top: 1px solid #2a2b30; margin-top: 8px; }
+#profile-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; padding: 6px 2px; border-top: 1px solid #2a2b30; margin-top: 8px; }
+#profile-select { width: 100%; min-width: 0; }
 #profile-bar .row { margin: 0; }
 #update-box { border-top: 1px solid #2a2b30; padding: 8px 2px; }
 #update-progress { width: 100%; margin-top: 6px; }
