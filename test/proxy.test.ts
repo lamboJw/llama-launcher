@@ -303,6 +303,57 @@ describe('LauncherProxy', () => {
     }
   });
 
+  it('records reasoning_content as decode for thinking models (empty content)', async () => {
+    const backend = http.createServer((req, res) => {
+      if (req.url?.startsWith('/v1/chat/completions')) {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.write('data: {"choices":[{"delta":{"reasoning_content":"thinking step 1 "}}]}\n\n');
+        res.write('data: {"choices":[{"delta":{"reasoning_content":"thinking step 2"}}]}\n\n');
+        res.write('data: {"choices":[{"delta":{"content":"final answer"}}]}\n\n');
+        res.write('data: [DONE]\n\n');
+        res.end();
+      } else {
+        res.writeHead(404, { 'content-type': 'text/plain' });
+        res.end('not found');
+      }
+    });
+    await new Promise<void>((r) => backend.listen(0, '127.0.0.1', r));
+    const bport = (backend.address() as { port: number }).port;
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'llama-proxy-reason-'));
+    try {
+      const records = new RecordsStore(dir, {});
+      const p2port = await probeFreePort(61500, 61999);
+      const c2 = new FakeController();
+      c2.port = bport;
+      c2.ready = true;
+      c2.current = 'm1';
+      c2.models = [ref('m1')];
+      const p2 = new LauncherProxy({
+        host: '127.0.0.1',
+        port: p2port,
+        controller: c2,
+        form: { ...DEFAULT_FORM, recordRounds: true },
+        records,
+      });
+      await p2.start();
+      const res = await postJson(p2port, '/v1/chat/completions', {
+        model: 'm1',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+      });
+      expect(res.status).toBe(200);
+      await waitFor(async () => (await records.listFiles()).length > 0);
+      const page = await records.tailPage(0);
+      expect(page.records.length).toBe(1);
+      expect(page.records[0].decode).toBe('thinking step 1 thinking step 2final answer');
+      expect(page.records[0].ttft_ms).not.toBeNull();
+      await p2.stop();
+    } finally {
+      backend.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('parses cached_tokens from the trailing usage chunk (streaming)', async () => {
     const backend = http.createServer((req, res) => {
       if (req.url?.startsWith('/v1/chat/completions')) {

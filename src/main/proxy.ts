@@ -338,16 +338,18 @@ export class LauncherProxy {
       res.write(chunk);
       for (const data of parser.feed(chunk.toString('utf8'))) {
         if (data === '[DONE]') continue;
-        let obj: { choices?: { delta?: { content?: unknown } }[]; usage?: unknown; timings?: unknown } | null = null;
+        let obj: { choices?: { delta?: { content?: unknown; reasoning_content?: unknown } }[]; usage?: unknown; timings?: unknown } | null = null;
         try {
           obj = JSON.parse(data);
         } catch {
           continue;
         }
-        const content = obj?.choices?.[0]?.delta?.content;
-        if (typeof content === 'string' && content.length > 0) {
+        const delta = obj?.choices?.[0]?.delta;
+        const content = typeof delta?.content === 'string' ? delta.content : '';
+        const reasoning = typeof delta?.reasoning_content === 'string' ? delta.reasoning_content : '';
+        if (content !== '' || reasoning !== '') {
           if (ttftMs === null) ttftMs = Date.now() - t0;
-          decode += content;
+          decode += reasoning + content;
         }
         if (obj?.usage !== undefined && obj?.usage !== null) usage = obj.usage;
         if (obj?.timings !== undefined && obj?.timings !== null) timings = obj.timings;
@@ -387,8 +389,10 @@ export class LauncherProxy {
         };
         if (obj?.usage !== undefined && obj?.usage !== null) usage = obj.usage;
         if (obj?.timings !== undefined && obj?.timings !== null) timings = obj.timings;
-        const content = obj?.choices?.[0]?.message?.content;
-        if (typeof content === 'string') decode = content;
+        const msg = obj?.choices?.[0]?.message;
+        const content = typeof msg?.content === 'string' ? msg.content : '';
+        const reasoning = typeof (msg as { reasoning_content?: unknown })?.reasoning_content === 'string' ? (msg as { reasoning_content: string }).reasoning_content : '';
+        if (content !== '' || reasoning !== '') decode = reasoning + content;
       } catch {
         /* 非 JSON 上游响应：decode 记空 */
       }

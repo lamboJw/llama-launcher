@@ -111,10 +111,12 @@ export class RecordsStore {
       let pos = size;
       let held: Buffer = Buffer.alloc(0);
       let rest = '';
-      const fileLines: string[] = [];
+      // 每个 chunk 单独存：fileChunks[0] 是最新 chunk，fileChunks[last] 是最旧 chunk
+      const fileChunks: string[][] = [];
+      let fileLineCount = 0;
       const fh = await fs.open(file, 'r');
       try {
-        while (pos > 0 && lines.length + fileLines.length < target) {
+        while (pos > 0 && lines.length + fileLineCount < target) {
           const readLen = Math.min(CHUNK, pos);
           const start = pos - readLen;
           const buf = Buffer.alloc(readLen);
@@ -136,16 +138,22 @@ export class RecordsStore {
           if (start > 0) {
             rest = parts.shift() ?? '';
           }
-          for (const l of parts) if (l !== '') fileLines.push(l);
+          const chunkLines: string[] = [];
+          for (const l of parts) if (l !== '') chunkLines.push(l);
+          fileChunks.push(chunkLines);
+          fileLineCount += chunkLines.length;
           pos = start;
         }
         // 读到的行超出所需（小文件一次读完）或文件/更旧文件仍有剩余 → 前面还有
-        if (fileLines.length > target - lines.length || (lines.length + fileLines.length >= target && (pos > 0 || fi < files.length - 1))) hasMore = true;
+        if (fileLineCount > target - lines.length || (lines.length + fileLineCount >= target && (pos > 0 || fi < files.length - 1))) hasMore = true;
       } finally {
         await fh.close();
       }
-      // 本文件行按旧→新顺序读出；倒序为新→旧后追加（文件按新→旧处理）
-      for (let i = fileLines.length - 1; i >= 0; i--) lines.push(fileLines[i]);
+      // fileChunks[0] 是最新 chunk（最先从尾部读到）；按 0→last 顺序、每 chunk 内部新→旧，得到整体新→旧顺序
+      for (let ci = 0; ci < fileChunks.length; ci++) {
+        const chunk = fileChunks[ci];
+        for (let i = chunk.length - 1; i >= 0; i--) lines.push(chunk[i]);
+      }
     }
     const records: RoundRecord[] = [];
     for (const l of lines.slice(0, target)) {

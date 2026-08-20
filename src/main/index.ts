@@ -293,7 +293,7 @@ function registerIpc(): void {
   ipcMain.handle('records:files', async () => (records ? records.listFiles() : []));
   ipcMain.handle('records:tail', async (_e, page: number) => {
     const store = records ?? new RecordsStore(recordsDir, { maxTotalBytes: config.getSettings().form.recordsMaxTotalBytes });
-    return store.tailPage(page, 50);
+    return store.tailPage(page, 10);
   });
 
   ipcMain.handle('updater:check', async () => {

@@ -669,7 +669,7 @@ async function loadRecords(): Promise<void> {
     box.appendChild(d);
   }
   $<HTMLDivElement>('records-view').scrollTop = 0;
-  $<HTMLSpanElement>('records-page').textContent = `第 ${recPage} 页（每页 50，第 0 页最新）`;
+  $<HTMLSpanElement>('records-page').textContent = `第 ${recPage} 页（每页 10，第 0 页最新）`;
   $<HTMLButtonElement>('records-prev').disabled = recPage === 0;
   $<HTMLButtonElement>('records-next').disabled = !recHasMore;
 }

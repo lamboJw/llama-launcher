@@ -58,6 +58,24 @@ describe('RecordsStore', () => {
     expect(p.records.map(r => r.ts)).toEqual([401, 400]);
   });
 
+  it('keeps newest-first order when a file spans multiple 2MB read chunks', async () => {
+    const s = new RecordsStore(dir);
+    // 24 条 × ~160KB ≈ 3.8MB → 至少跨 2 个 2MB 读块
+    const pad = 'x'.repeat(160 * 1024);
+    for (let i = 1; i <= 24; i++) {
+      await s.append({ ts: i, model: 'm', prompt: pad, decode: 'd' + i, ttft_ms: 1, usage: null });
+    }
+    const p0 = await s.tailPage(0, 10);
+    expect(p0.records.map(r => r.ts)).toEqual([24, 23, 22, 21, 20, 19, 18, 17, 16, 15]);
+    expect(p0.hasMore).toBe(true);
+    const p1 = await s.tailPage(1, 10);
+    expect(p1.records.map(r => r.ts)).toEqual([14, 13, 12, 11, 10, 9, 8, 7, 6, 5]);
+    expect(p1.hasMore).toBe(true);
+    const p2 = await s.tailPage(2, 10);
+    expect(p2.records.map(r => r.ts)).toEqual([4, 3, 2, 1]);
+    expect(p2.hasMore).toBe(false);
+  });
+
   it('enforces total cap by deleting oldest files', async () => {
     const s = new RecordsStore(dir, { maxFileBytes: 150, maxTotalBytes: 400 });
     for (let i = 500; i < 520; i++) await s.append(rec(i));
