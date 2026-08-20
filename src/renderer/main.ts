@@ -83,7 +83,7 @@ const GROUPS: { title: string; fields: FieldSpec[] }[] = [
     { id: 'batchSize', label: 'batch-size', type: 'text' },
     { id: 'ubatchSize', label: 'ubatch-size', type: 'text' },
     { id: 'cacheRam', label: 'KV 缓存内存 (GB)', type: 'text' },
-    { id: 'flashAttn', label: 'Flash attention', type: 'select', options: [['', '默认'], ['1', '开'], ['0', '关']] },
+    { id: 'flashAttn', label: 'Flash attention', type: 'select', options: [['', '默认(auto)'], ['on', 'on'], ['off', 'off'], ['auto', 'auto']] },
     { id: 'swaFull', label: 'SWA 全注意力', type: 'checkbox' },
   ]},
   { title: '采样', fields: [
@@ -102,7 +102,7 @@ const GROUPS: { title: string; fields: FieldSpec[] }[] = [
   ]},
   { title: '投机解码 (MTP)', fields: [
     { id: 'specDefault', label: '默认启用 (spec-default)', type: 'checkbox' },
-    { id: 'specType', label: '方式', type: 'select', options: [['', '无'], ['mtp', 'MTP'], ['draft', 'draft']] },
+    { id: 'specType', label: '方式（spec-type）', type: 'select', options: [['', '无(none)'], ['draft-mtp', 'draft-mtp（MTP）'], ['draft-simple', 'draft-simple（草稿模型）'], ['draft-eagle3', 'draft-eagle3'], ['draft-dflash', 'draft-dflash'], ['draft-dspark', 'draft-dspark'], ['ngram-simple', 'ngram-simple'], ['ngram-map-k', 'ngram-map-k'], ['ngram-map-k4v', 'ngram-map-k4v'], ['ngram-mod', 'ngram-mod'], ['ngram-cache', 'ngram-cache']] },
     { id: 'specDraftModel', label: '草稿模型（本地）', type: 'text' },
     { id: 'specDraftHf', label: '草稿模型（HF）', type: 'text' },
     { id: 'specDraftNMax', label: 'n-max', type: 'text' },

@@ -69,6 +69,21 @@ describe('migrateForm（旧版布尔配置迁移）', () => {
     expect(f2.fit).toBe('off');
   });
 
+  it('flashAttn 0/1 迁移为文档枚举 on/off', () => {
+    expect(migrateForm({ ...DEFAULT_FORM, flashAttn: '1' } as FormValues).flashAttn).toBe('on');
+    expect(migrateForm({ ...DEFAULT_FORM, flashAttn: '0' } as FormValues).flashAttn).toBe('off');
+    expect(migrateForm({ ...DEFAULT_FORM, flashAttn: 'auto' }).flashAttn).toBe('auto');
+  });
+
+  it('旧版 specType 非法枚举值迁移为 b10488 真实值（mtp -> draft-mtp，draft -> draft-simple）', () => {
+    const f1 = migrateForm({ ...DEFAULT_FORM, specType: 'mtp' } as FormValues);
+    expect(f1.specType).toBe('draft-mtp');
+    const f2 = migrateForm({ ...DEFAULT_FORM, specType: 'draft' } as FormValues);
+    expect(f2.specType).toBe('draft-simple');
+    const f3 = migrateForm({ ...DEFAULT_FORM, specType: 'draft-mtp,ngram-simple' });
+    expect(f3.specType).toBe('draft-mtp,ngram-simple');
+  });
+
   it('新值形态原样保留', () => {
     const f = migrateForm({ ...DEFAULT_FORM, fit: 'off', cacheReuse: '128', tensorSplit: '3,1' });
     expect(f.fit).toBe('off');

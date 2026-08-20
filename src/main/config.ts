@@ -93,6 +93,12 @@ export function migrateForm(f: FormValues): FormValues {
   const any = o as unknown as Record<string, unknown>;
   if (typeof any.fit === 'boolean') any.fit = (any.fit as boolean) ? 'on' : 'off';
   if (typeof any.cacheReuse === 'boolean') any.cacheReuse = '';
+  // 旧版 specType 下拉给了 b10488 不存在的值（mtp/draft）→ 真实枚举值
+  if (any.specType === 'mtp') any.specType = 'draft-mtp';
+  else if (any.specType === 'draft') any.specType = 'draft-simple';
+  // flash-attn 文档枚举为 on|off|auto（0/1 虽被强转接受，统一为文档值）
+  if (any.flashAttn === '1') any.flashAttn = 'on';
+  else if (any.flashAttn === '0') any.flashAttn = 'off';
   for (const k of ['tensorSplit', 'specDraftTypeK', 'specDraftTypeV'] as const) {
     if (typeof any[k] !== 'string') any[k] = '';
   }
