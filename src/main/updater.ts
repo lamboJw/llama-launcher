@@ -277,6 +277,45 @@ export async function verifyExe(exePath: string): Promise<number> {
   return pv.build;
 }
 
+// ---------- 自动发现（手动安装 / 软链进 llama.cpp 目录而 manifest 缺失） ----------
+export interface AutoDiscoverOptions {
+  baseDir: string;
+  exeName?: string;
+  verify?: (exePath: string) => Promise<number | void>;
+}
+
+/** manifest 缺失时扫描含 llama-server(.exe) 的 b\d+ 版本目录，逐个验证并登记 manifest；
+ *  已有 manifest 内容则原样返回；未找到 → []（不写文件） */
+export async function autoDiscoverVersions(opts: AutoDiscoverOptions): Promise<InstalledVersion[]> {
+  const existing = await readManifest(opts.baseDir);
+  if (existing.length > 0) return existing;
+  const exeName = opts.exeName ?? (process.platform === 'win32' ? 'llama-server.exe' : 'llama-server');
+  let dirs: string[] = [];
+  try { dirs = await fs.readdir(opts.baseDir); } catch { return []; }
+  // cudaVersion：baseDir/cuda/cuda-* 中版本号最高者（无 → null，exe 用自带 DLL）
+  let cudaDirs: string[] = [];
+  try { cudaDirs = (await fs.readdir(path.join(opts.baseDir, 'cuda'))).filter((d) => /^cuda-\d/.test(d)); } catch { cudaDirs = []; }
+  const cudaVersion = cudaDirs.sort((a, b) => cmpVer(b.slice(5), a.slice(5)))[0]?.slice(5) ?? null;
+  const out: InstalledVersion[] = [];
+  const builds = dirs
+    .map((x) => x.match(/^b(\d+)$/)?.[1] ?? null)
+    .filter((x): x is string => x !== null)
+    .sort((a, b) => Number(b) - Number(a));
+  for (const b of builds) {
+    const exePath = path.join(opts.baseDir, `b${b}`, exeName);
+    if (!existsSync(exePath)) continue;
+    let valid = true;
+    try {
+      await (opts.verify ?? verifyExe)(exePath);
+    } catch {
+      valid = false; // 验证失败照登记（valid false → UI 标红，与 runUpdate 语义一致）
+    }
+    out.push({ tag: `b${b}`, cudaVersion, installedAt: Date.now(), valid });
+  }
+  if (out.length > 0) await writeManifest(opts.baseDir, out);
+  return out;
+}
+
 // ---------- 完整更新流程（规格 §9.2 更新流程 1-7） ----------
 export interface RunUpdateOptions {
   baseDir: string;                 // <appRoot>/llama.cpp

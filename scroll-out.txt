@@ -1,0 +1,17 @@
+
+[19692:0820/154725.298:ERROR:net\disk_cache\cache_util_win.cc:25] Unable to move the cache: 拒绝访问。 (0x5)
+[19692:0820/154725.298:ERROR:net\disk_cache\cache_util_win.cc:25] Unable to move the cache: 拒绝访问。 (0x5)
+[19692:0820/154725.298:ERROR:net\disk_cache\disk_cache.cc:284] Unable to create cache
+[19692:0820/154725.298:ERROR:gpu\ipc\host\gpu_disk_cache.cc:737] Gpu Cache Creation failed: -2
+[19692:0820/154725.298:ERROR:net\disk_cache\cache_util_win.cc:25] Unable to move the cache: 拒绝访问。 (0x5)
+[19692:0820/154725.298:ERROR:net\disk_cache\disk_cache.cc:284] Unable to create cache
+[19692:0820/154725.298:ERROR:gpu\ipc\host\gpu_disk_cache.cc:737] Gpu Cache Creation failed: -2
+[19692:0820/154725.298:ERROR:net\disk_cache\disk_cache.cc:284] Unable to create cache
+[19692:0820/154725.299:ERROR:gpu\ipc\host\gpu_disk_cache.cc:737] Gpu Cache Creation failed: -2
+(node:19692) electron: Failed to load URL: file:///F:/llama_lanucher/scripts/dist/renderer/index.html with error: ERR_FILE_NOT_FOUND
+(Use `electron --trace-warnings ...` to show where the warning was created)
+(node:19692) UnhandledPromiseRejectionWarning: Error: ERR_FILE_NOT_FOUND (-6) loading 'file:///F:/llama_lanucher/scripts/dist/renderer/index.html'
+    at rejectAndCleanup (node:electron/js2c/browser_init:2:94962)
+    at WebContents.finishListener (node:electron/js2c/browser_init:2:95124)
+    at WebContents.emit (node:events:509:28)
+(node:19692) UnhandledPromiseRejectionWarning: Unhandled promise rejection. This error originated either by throwing inside of an async function without a catch block, or by rejecting a promise which was not handled with .catch(). To terminate the node process on unhandled promise rejection, use the CLI flag `--unhandled-rejections=strict` (see https://nodejs.org/api/cli.html#cli_unhandled_rejections_mode). (rejection id: 1)

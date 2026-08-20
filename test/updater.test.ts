@@ -1,6 +1,6 @@
 // updater.test.ts — llama.cpp 更新检查与自动下载（规格 §9.2）
 // 本地 HTTP 服务器（支持 Range）+ adm-zip 夹具；不依赖 GitHub 网络
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import http from 'node:http';
 import { mkdtemp, rm, readFile, writeFile, mkdir, stat, readdir } from 'node:fs/promises';
 import os from 'node:os';
@@ -15,6 +15,7 @@ import {
   pruneVersions,
   readManifest,
   writeManifest,
+  autoDiscoverVersions,
   checkLatestRelease,
   runUpdate,
   type ReleaseAsset,
@@ -389,5 +390,66 @@ describe('runUpdate', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('autoDiscoverVersions（manifest 缺失时自动发现版本目录）', () => {
+  let base: string;
+
+  beforeEach(async () => {
+    base = await mkdtemp(path.join(os.tmpdir(), 'llama-ad-'));
+  });
+  afterEach(async () => {
+    await rm(base, { recursive: true, force: true });
+  });
+
+  it('空目录 -> []，不写 manifest', async () => {
+    const r = await autoDiscoverVersions({ baseDir: base, verify: async () => 100, exeName: 'llama-server.exe' });
+    expect(r).toEqual([]);
+    await expect(readFile(path.join(base, 'manifest.json'))).rejects.toBeDefined();
+  });
+
+  it('发现含 exe 的 b* 目录；cudaVersion 取最新 cuda-*；写 manifest', async () => {
+    await mkdir(path.join(base, 'b10488'), { recursive: true });
+    await writeFile(path.join(base, 'b10488', 'llama-server.exe'), 'x');
+    await mkdir(path.join(base, 'cuda', 'cuda-13.3'), { recursive: true });
+    await writeFile(path.join(base, 'cuda', 'cuda-13.3', 'cudart64_13.dll'), 'x');
+    const r = await autoDiscoverVersions({ baseDir: base, verify: async () => 10488, exeName: 'llama-server.exe' });
+    expect(r).toHaveLength(1);
+    expect(r[0].tag).toBe('b10488');
+    expect(r[0].cudaVersion).toBe('13.3');
+    expect(r[0].valid).toBe(true);
+    const m = await readManifest(base);
+    expect(m.map((x) => x.tag)).toEqual(['b10488']);
+  });
+
+  it('多版本降序；无 exe 的目录跳过；verify 失败 -> valid false', async () => {
+    await mkdir(path.join(base, 'b99999'), { recursive: true }); // 无 exe → 跳过
+    await mkdir(path.join(base, 'b88888'), { recursive: true });
+    await writeFile(path.join(base, 'b88888', 'llama-server.exe'), 'x');
+    await mkdir(path.join(base, 'b77777'), { recursive: true });
+    await writeFile(path.join(base, 'b77777', 'llama-server.exe'), 'x');
+    const r = await autoDiscoverVersions({
+      baseDir: base,
+      verify: async (p) => (p.includes('b77777') ? Promise.reject(new Error('bad')) : 77777),
+      exeName: 'llama-server.exe',
+    });
+    expect(r.map((x) => x.tag)).toEqual(['b88888', 'b77777']);
+    expect(r[0].valid).toBe(true);
+    expect(r[1].valid).toBe(false);
+  });
+
+  it('无 cuda 目录 -> cudaVersion null', async () => {
+    await mkdir(path.join(base, 'b55555'), { recursive: true });
+    await writeFile(path.join(base, 'b55555', 'llama-server.exe'), 'x');
+    const r = await autoDiscoverVersions({ baseDir: base, verify: async () => 55555, exeName: 'llama-server.exe' });
+    expect(r[0].cudaVersion).toBeNull();
+  });
+
+  it('已有 manifest 时原样返回，不覆盖', async () => {
+    const existing: InstalledVersion[] = [{ tag: 'b1', cudaVersion: null, installedAt: 1, valid: true }];
+    await writeManifest(base, existing);
+    const r = await autoDiscoverVersions({ baseDir: base, verify: async () => 1, exeName: 'llama-server.exe' });
+    expect(r).toEqual(existing);
   });
 });

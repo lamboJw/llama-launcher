@@ -14,7 +14,7 @@ import { LauncherProxy } from './proxy.js';
 import { RecordsStore } from './records.js';
 import { StatsStore } from './stats.js';
 import { RoundTracker, parseTimingLine } from './log-parser.js';
-import { checkLatestRelease, runUpdate, readManifest, type ReleaseInfo } from './updater.js';
+import { checkLatestRelease, runUpdate, readManifest, autoDiscoverVersions, type ReleaseInfo } from './updater.js';
 import { parseVersion, versionBanner, BASELINE_BUILD } from './version.js';
 import type {
   FormValues, HfModel, InstalledVersion, LocalModel, ModelRef, ParsedVersion,
@@ -160,7 +160,12 @@ async function refreshUnion(): Promise<void> {
 }
 
 async function refreshInstalled(): Promise<void> {
-  try { installed = await readManifest(llamaBaseDir()); } catch { installed = []; }
+  try {
+    let entries = await readManifest(llamaBaseDir());
+    // manifest 缺失（手动安装 / 软链进 llama.cpp 目录）→ 自动发现版本目录并登记
+    if (entries.length === 0) entries = await autoDiscoverVersions({ baseDir: llamaBaseDir() });
+    installed = entries;
+  } catch { installed = []; }
 }
 
 // ---------- 启动 / 停止（规格 §2.2/§2.3） ----------
