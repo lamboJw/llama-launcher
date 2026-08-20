@@ -176,6 +176,7 @@ function buildField(f: FieldSpec): HTMLElement {
   row.className = 'field';
   const label = document.createElement('label');
   label.textContent = f.label;
+  label.title = f.label; // 超长参数名截断后，鼠标悬停显示完整名称
   row.appendChild(label);
   let el: HTMLInputElement | HTMLSelectElement;
   if (f.type === 'checkbox') {
@@ -213,6 +214,7 @@ function buildDirField(id: 'scanDir' | 'hfCacheDir', label: string): HTMLElement
   row.className = 'field';
   const lab = document.createElement('label');
   lab.textContent = label;
+  lab.title = label;
   row.appendChild(lab);
   const input = document.createElement('input');
   input.type = 'text';
