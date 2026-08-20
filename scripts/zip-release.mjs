@@ -24,33 +24,39 @@ if (!(await stat(exe).then(() => true, () => false))) {
   process.exit(1);
 }
 
-// 产物目录重命名为 llama-launcher/（zip 根目录更直观）；被占用时保持原名
+// 产物目录重命名为 llama-launcher/（zip 根目录更直观）；被占用（例如正在运行）时
+// 不碰文件系统，改用 adm-zip 在 zip 内直接重根（addLocalFolder 的 zipRoot 参数）
 let zipRoot = folder.name;
 const pretty = path.join(releaseDir, 'llama-launcher');
+let renamed = false;
 if (folder.name !== 'llama-launcher') {
-  await rm(pretty, { recursive: true, force: true });
   try {
+    await rm(pretty, { recursive: true, force: true });
     await (await import('node:fs/promises')).rename(src, pretty);
     src = pretty;
     zipRoot = 'llama-launcher';
-  } catch { /* 目录被占用（例如正在运行）→ 保持原名 */ }
+    renamed = true;
+  } catch { /* 被占用 → 保持原名，稍后 adm-zip 重根 */ }
 }
 
 const zipName = 'llama-launcher-' + pkg.version + '-portable-win32-x64.zip';
 const zipPath = path.join(releaseDir, zipName);
 await rm(zipPath, { force: true });
 
-// 优先 Windows 10+ 自带 bsdtar（流式、低内存）；失败回退 adm-zip
-let used = 'tar';
-try {
-  await execFileAsync('tar', ['-a', '-c', '-f', zipPath, '-C', releaseDir, zipRoot], { maxBuffer: 64 * 1024 * 1024 });
-} catch (e) {
-  used = 'adm-zip';
-  await rm(zipPath, { force: true });
+// 重命名成功 → Windows 10+ 自带 bsdtar（流式、低内存）；否则 adm-zip 重根打包
+let used = 'adm-zip';
+if (renamed) {
+  try {
+    await execFileAsync('tar', ['-a', '-c', '-f', zipPath, '-C', releaseDir, zipRoot], { maxBuffer: 64 * 1024 * 1024 });
+    used = 'tar';
+  } catch { await rm(zipPath, { force: true }); }
+}
+if (used === 'adm-zip') {
   const AdmZip = (await import('adm-zip')).default;
   const zip = new AdmZip();
-  zip.addLocalFolder(src, zipRoot);
+  zip.addLocalFolder(src, 'llama-launcher');
   zip.writeZip(zipPath);
+  zipRoot = 'llama-launcher';
 }
 
 const z = await stat(zipPath);
