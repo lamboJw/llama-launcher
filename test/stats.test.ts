@@ -17,6 +17,15 @@ describe('StatsStore', () => {
     });
   });
 
+  it('request 自带 timings 直读值时优先于日志配对', () => {
+    const s = new StatsStore();
+    s.addRequest({ model: 'm', ttftMs: 120, cacheHitRate: 0.25, prefillMs: 5000, prefillTps: 20, decodeTps: 14.3, ts: 1000 });
+    s.addRound(ROUND); // 若走日志配对会得到 44009.4
+    expect(s.getLatest()!.prefillMs).toBe(5000);
+    expect(s.getLatest()!.prefillTps).toBe(20);
+    expect(s.getLatest()!.decodeTps).toBe(14.3);
+  });
+
   it('round outside window not paired', () => {
     const s = new StatsStore();
     s.addRequest(REQ);

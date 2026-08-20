@@ -10,7 +10,7 @@ const BASE: FormValues = {
   corsOrigins: '', corsMethods: '', corsHeaders: '', corsCredentials: false,
   nGpuLayers: '', threads: '', threadsBatch: '', splitMode: '',
   device: '', loadMode: '', fit: '', tensorSplit: '', cacheTypeK: '', cacheTypeV: '', nCpuMoE: '',
-  ctxSize: '', parallel: '', batchSize: '', ubatchSize: '',
+  ctxSize: '', parallel: '', batchSize: '', ubatchSize: '', ctxCheckpoints: '',
   cacheRam: '', flashAttn: '', swaFull: false,
   temperature: '', topK: '', topP: '', minP: '',
   repeatPenalty: '', presencePenalty: '', frequencyPenalty: '',
@@ -44,6 +44,13 @@ function hasPair(argv: string[], flag: string, val: string): boolean {
 }
 
 describe('buildArgs', () => {
+  it('ctxCheckpoints → --ctx-checkpoints N（空 → 不传）', () => {
+    const { argv } = buildArgs({ ...BASE, ctxCheckpoints: '16' }, LOCAL, 59999);
+    expect(hasPair(argv, '--ctx-checkpoints', '16')).toBe(true);
+    const none = buildArgs(BASE, LOCAL, 59999);
+    expect(none.argv).not.toContain('--ctx-checkpoints');
+  });
+
   it('local model + forced args + explicit booleans', () => {
     const { argv, env, argToField } = buildArgs(BASE, LOCAL, 59999);
     expect(hasPair(argv, '--model', 'C:/models/m.gguf')).toBe(true);

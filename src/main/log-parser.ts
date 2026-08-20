@@ -5,9 +5,11 @@ import type { TimingEvent } from '../shared/types.js';
 
 const ANSI = /\x1b\[[0-9;]*m/g;
 
-// 两种单位（tokens/runs）+ 可选 llama_print_timings: 前缀 + 可选 ANSI，全部容错
-const PROMPT_RE = /^\s*(?:llama_print_timings:\s*)?prompt eval time =\s+([\d.]+)\s*ms\s*\/\s*(\d+)\s+\S+\s*\(\s*([\d.]+)\s*ms per token,\s*([\d.]+)\s*\S+ per second\)/;
-const EVAL_RE = /^\s*(?:llama_print_timings:\s*)?eval time =\s+([\d.]+)\s*ms\s*\/\s*(\d+)\s+\S+\s*\(\s*([\d.]+)\s*ms per token,\s*([\d.]+)\s*\S+ per second\)/;
+// 非锚定：b10488 行前缀为 "123.28.509 I slot print_timing: id 3 | task 0 |"（旧 ^ 锚定匹配不到 →
+// 统计卡片全空）；llama_print_timings: 前缀与 ANSI 自然兼容。
+// EVAL 需后行断言：prompt 行内嵌 "eval time" 子串（"prompt eval time"）不得误匹配。
+const PROMPT_RE = /\bprompt eval time =\s+([\d.]+)\s*ms\s*\/\s*(\d+)\s+\S+\s*\(\s*([\d.]+)\s*ms per token,\s*([\d.]+)\s*\S+ per second\)/;
+const EVAL_RE = /(?<!prompt )\beval time =\s+([\d.]+)\s*ms\s*\/\s*(\d+)\s+\S+\s*\(\s*([\d.]+)\s*ms per token,\s*([\d.]+)\s*\S+ per second\)/;
 
 export function parseTimingLine(raw: string): TimingEvent | null {
   const line = raw.replace(ANSI, '');

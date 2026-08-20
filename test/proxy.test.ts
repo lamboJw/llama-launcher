@@ -337,6 +337,42 @@ describe('LauncherProxy', () => {
     await new Promise<void>((r) => backend.close(() => r()));
   });
 
+  it('b10488 实测格式：SSE 尾部 chunk 带 timings（无 usage）→ prefill/decode/缓存命中率直读', async () => {
+    const backend = http.createServer((req, res) => {
+      if (req.url?.startsWith('/v1/chat/completions')) {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.write('data: {"choices":[{"delta":{"content":"A"}}]}\n\n');
+        res.write('data: {"choices":[{"delta":{}}],"timings":{"cache_n":25,"prompt_n":100,"prompt_ms":5000,"prompt_per_token_ms":50,"prompt_per_second":20,"predicted_n":10,"predicted_ms":700,"predicted_per_token_ms":70,"predicted_per_second":14.3}}\n\n');
+        res.write('data: [DONE]\n\n');
+        res.end();
+      } else {
+        res.writeHead(404, { 'content-type': 'text/plain' });
+        res.end('not found');
+      }
+    });
+    await new Promise<void>((r) => backend.listen(0, '127.0.0.1', r));
+    const bport = (backend.address() as { port: number }).port;
+    const p2port = await probeFreePort(61500, 61999);
+    const c2 = new FakeController();
+    c2.port = bport;
+    c2.ready = true;
+    c2.current = 'm1';
+    c2.models = [ref('m1')];
+    const s2: RequestStats[] = [];
+    const p2 = new LauncherProxy({ host: '127.0.0.1', port: p2port, controller: c2, form: { ...DEFAULT_FORM }, onStats: (s) => s2.push(s) });
+    await p2.start();
+    const res = await postJson(p2port, '/v1/chat/completions', { model: 'm1', messages: [{ role: 'user', content: 'hi' }], stream: true });
+    expect(res.status).toBe(200);
+    expect(s2.length).toBe(1);
+    expect(s2[0].prefillMs).toBe(5000);
+    expect(s2[0].prefillTps).toBe(20);
+    expect(s2[0].decodeTps).toBe(14.3);
+    expect(s2[0].cacheHitRate).toBeCloseTo(0.25); // timings.cache_n / prompt_n（流式无 usage）
+    await p2.stop();
+    backend.closeAllConnections();
+    await new Promise<void>((r) => backend.close(() => r()));
+  });
+
   it('parses usage and message content from a non-streaming JSON response', async () => {
     const backend = http.createServer((_req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });

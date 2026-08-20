@@ -21,7 +21,7 @@ export const DEFAULT_FORM: FormValues = {
   device: '', loadMode: '', fit: '', tensorSplit: '',
   cacheTypeK: '', cacheTypeV: '', nCpuMoE: '',
   // 上下文组
-  ctxSize: '', parallel: '', batchSize: '', ubatchSize: '',
+  ctxSize: '', parallel: '', batchSize: '', ubatchSize: '', ctxCheckpoints: '',
   cacheRam: '', flashAttn: '', swaFull: false,
   // 采样组
   temperature: '', topK: '', topP: '', minP: '',

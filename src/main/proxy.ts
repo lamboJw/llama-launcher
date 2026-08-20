@@ -63,6 +63,19 @@ class SseParser {
   }
 }
 
+/** 响应 timings（b10488：SSE 尾部 chunk / 非流式 JSON 都带）→ prefill/decode/缓存命中率直读 */
+export function extractTimings(t: unknown): { prefillMs: number | null; prefillTps: number | null; decodeTps: number | null; cacheHitRate: number | null } {
+  const none = { prefillMs: null as number | null, prefillTps: null as number | null, decodeTps: null as number | null, cacheHitRate: null as number | null };
+  if (t === null || typeof t !== 'object') return none;
+  const ti = t as { prompt_ms?: unknown; prompt_per_second?: unknown; predicted_per_second?: unknown; cache_n?: unknown; prompt_n?: unknown };
+  const prefillMs = typeof ti.prompt_ms === 'number' ? ti.prompt_ms : null;
+  const prefillTps = typeof ti.prompt_per_second === 'number' ? ti.prompt_per_second : null;
+  const decodeTps = typeof ti.predicted_per_second === 'number' ? ti.predicted_per_second : null;
+  let cacheHitRate: number | null = null;
+  if (typeof ti.cache_n === 'number' && typeof ti.prompt_n === 'number' && ti.prompt_n > 0) cacheHitRate = ti.cache_n / ti.prompt_n;
+  return { prefillMs, prefillTps, decodeTps, cacheHitRate };
+}
+
 /** usage.prompt_tokens_details.cached_tokens / prompt_tokens → 命中率（不可计算返回 null） */
 export function computeCacheHitRate(usage: unknown): number | null {
   if (usage === null || typeof usage !== 'object') return null;
@@ -318,13 +331,14 @@ export class LauncherProxy {
     const prompt = this.extractPrompt(body);
     let ttftMs: number | null = null;
     let usage: unknown = null;
+    let timings: unknown = null;
     let decode = '';
     const parser = new SseParser();
     up.on('data', (chunk: Buffer) => {
       res.write(chunk);
       for (const data of parser.feed(chunk.toString('utf8'))) {
         if (data === '[DONE]') continue;
-        let obj: { choices?: { delta?: { content?: unknown } }[]; usage?: unknown } | null = null;
+        let obj: { choices?: { delta?: { content?: unknown } }[]; usage?: unknown; timings?: unknown } | null = null;
         try {
           obj = JSON.parse(data);
         } catch {
@@ -336,10 +350,11 @@ export class LauncherProxy {
           decode += content;
         }
         if (obj?.usage !== undefined && obj?.usage !== null) usage = obj.usage;
+        if (obj?.timings !== undefined && obj?.timings !== null) timings = obj.timings;
       }
     });
     const finish = () => {
-      this.finishStats(model, ttftMs, usage, decode, prompt);
+      this.finishStats(model, ttftMs, usage, timings, decode, prompt);
     };
     up.on('end', () => {
       res.end();
@@ -362,19 +377,22 @@ export class LauncherProxy {
     });
     const finish = () => {
       let usage: unknown = null;
+      let timings: unknown = null;
       let decode = '';
       try {
         const obj = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
           usage?: unknown;
+          timings?: unknown;
           choices?: { message?: { content?: unknown } }[];
         };
         if (obj?.usage !== undefined && obj?.usage !== null) usage = obj.usage;
+        if (obj?.timings !== undefined && obj?.timings !== null) timings = obj.timings;
         const content = obj?.choices?.[0]?.message?.content;
         if (typeof content === 'string') decode = content;
       } catch {
         /* 非 JSON 上游响应：decode 记空 */
       }
-      this.finishStats(model, null, usage, decode, prompt);
+      this.finishStats(model, null, usage, timings, decode, prompt);
     };
     up.on('end', () => {
       res.end();
@@ -385,9 +403,10 @@ export class LauncherProxy {
     });
   }
 
-  private finishStats(model: string, ttftMs: number | null, usage: unknown, decode: string, prompt: string): void {
-    const cacheHitRate = computeCacheHitRate(usage);
-    this.opts.onStats?.({ model, ttftMs, cacheHitRate, ts: Date.now() });
+  private finishStats(model: string, ttftMs: number | null, usage: unknown, timings: unknown, decode: string, prompt: string): void {
+    const t = extractTimings(timings);
+    const cacheHitRate = computeCacheHitRate(usage) ?? t.cacheHitRate; // 流式无 usage 时回退 timings
+    this.opts.onStats?.({ model, ttftMs, cacheHitRate, prefillMs: t.prefillMs, prefillTps: t.prefillTps, decodeTps: t.decodeTps, ts: Date.now() });
     if (this.form.recordRounds && this.records !== null) {
       void this.records.append({ ts: Date.now(), model, prompt, decode, ttft_ms: ttftMs, usage });
     }

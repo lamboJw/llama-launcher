@@ -41,6 +41,7 @@ export interface FormValues {
   cacheTypeK: string; cacheTypeV: string; nCpuMoE: string;
   // 上下文组
   ctxSize: string; parallel: string; batchSize: string; ubatchSize: string;
+  ctxCheckpoints: string;
   cacheRam: string; flashAttn: string; swaFull: boolean;
   // 采样组
   temperature: string; topK: string; topP: string; minP: string;
@@ -71,6 +72,8 @@ export interface TimingEvent {
 
 export interface RequestStats {
   model: string; ttftMs: number | null; cacheHitRate: number | null; ts: number;
+  // b10488 响应自带 timings（SSE 尾部 chunk / 非流式）→ 直读，免日志配对
+  prefillMs: number | null; prefillTps: number | null; decodeTps: number | null;
 }
 
 export interface RoundStats {

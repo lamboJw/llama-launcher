@@ -5,6 +5,9 @@ const PROMPT = 'prompt eval time =   44009.40 ms / 19417 tokens (    2.27 ms per
 const EVAL = '       eval time =    5872.68 ms /   233 tokens (   25.20 ms per token,    39.68 tokens per second)';
 const EVAL_RUNS = '       eval time =    5872.68 ms /   233 runs (   25.20 ms per token,    39.68 runs per second)';
 const PREFIXED = 'llama_print_timings: prompt eval time = 100.00 ms / 50 tokens ( 2.00 ms per token, 50.00 tokens per second)';
+// b10488 实测行：时间戳 + slot print_timing 前缀（旧 ^ 锚定正则匹配不到 → 统计卡片全空）
+const B10488_PROMPT = '123.28.509.608 I slot print_timing: id  3 | task 0 | prompt eval time =   12091.35 ms /    54 tokens (  223.91 ms per token,     4.47 tokens per second)';
+const B10488_EVAL = '123.28.509.615 I slot print_timing: id  3 | task 0 |        eval time =     485.87 ms /     8 tokens (   69.41 ms per token,    14.41 tokens per second)';
 
 describe('parseTimingLine', () => {
   it('prompt line -> prefill metrics', () => {
@@ -25,6 +28,14 @@ describe('parseTimingLine', () => {
   });
   it('ansi codes tolerated', () => {
     expect(parseTimingLine('\x1b[32m' + PROMPT + '\x1b[0m')!.kind).toBe('prompt');
+  });
+  it('b10488 真实格式：时间戳 + slot 前缀的 prompt 行', () => {
+    const p = parseTimingLine(B10488_PROMPT)!;
+    expect(p).toEqual({ kind: 'prompt', ms: 12091.35, tokens: 54, msPerToken: 223.91, tps: 4.47 });
+  });
+  it('b10488 真实格式：带对齐空格的 eval 行（不得误判为 prompt）', () => {
+    const e = parseTimingLine(B10488_EVAL)!;
+    expect(e).toEqual({ kind: 'eval', ms: 485.87, tokens: 8, msPerToken: 69.41, tps: 14.41 });
   });
   it('non-timing line -> null', () => {
     expect(parseTimingLine('slot release: id  0 | task 0')).toBeNull();

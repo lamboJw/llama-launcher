@@ -39,9 +39,10 @@ export class StatsStore {
         model: req.model,
         ttftMs: req.ttftMs,
         cacheHitRate: req.cacheHitRate,
-        prefillMs: best?.prefillMs ?? null,
-        prefillTps: best?.prefillTps ?? null,
-        decodeTps: best?.decodeTps ?? null,
+        // 响应 timings 直读优先（b10488）；旧版本无 timings → 回退日志配对
+        prefillMs: req.prefillMs ?? best?.prefillMs ?? null,
+        prefillTps: req.prefillTps ?? best?.prefillTps ?? null,
+        decodeTps: req.decodeTps ?? best?.decodeTps ?? null,
       });
     }
     return out;

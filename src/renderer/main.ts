@@ -82,7 +82,8 @@ const GROUPS: { title: string; fields: FieldSpec[] }[] = [
     { id: 'parallel', label: '并行槽位 (parallel)', type: 'text' },
     { id: 'batchSize', label: 'batch-size', type: 'text' },
     { id: 'ubatchSize', label: 'ubatch-size', type: 'text' },
-    { id: 'cacheRam', label: 'KV 缓存内存 (GB)', type: 'text' },
+    { id: 'cacheRam', label: 'KV 缓存内存 (MB, 默认8192)', type: 'text' },
+    { id: 'ctxCheckpoints', label: '上下文检查点 (ctx-checkpoints)', type: 'text' },
     { id: 'flashAttn', label: 'Flash attention', type: 'select', options: [['', '默认(auto)'], ['on', 'on'], ['off', 'off'], ['auto', 'auto']] },
     { id: 'swaFull', label: 'SWA 全注意力', type: 'checkbox' },
   ]},
@@ -519,6 +520,57 @@ function chatBubble(role: 'user' | 'assistant' | 'sys', text: string): HTMLEleme
   return d;
 }
 
+
+// 最小安全 Markdown：先整体 HTML 转义，再做受限变换（无依赖）
+const NUL = String.fromCharCode(0);
+
+function mdEscape(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function renderMarkdown(src: string): string {
+  const blocks: string[] = [];
+  let text = src.replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, _lang, code: string) => {
+    blocks.push('<pre class="md-code"><code>' + mdEscape(code.replace(/\n$/, '')) + '</code></pre>');
+    return NUL + 'CB' + (blocks.length - 1) + NUL;
+  });
+  text = mdEscape(text);
+  text = text.replace(/`([^\`\n]+)`/g, '<code class="md-ci">$1</code>');
+  text = text.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  text = text.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+  text = text.replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  const out: string[] = [];
+  let list: 'ul' | 'ol' | null = null;
+  const closeList = (): void => { if (list !== null) { out.push('</' + list + '>'); list = null; } };
+  for (const line of text.split('\n')) {
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    const ul = line.match(/^\s*[-*]\s+(.*)$/);
+    const ol = line.match(/^\s*\d+[.)]\s+(.*)$/);
+    const bq = line.match(/^&gt;\s?(.*)$/);
+    if (h !== null) { closeList(); out.push('<div class="md-h">' + h[2] + '</div>'); }
+    else if (ul !== null) { if (list !== 'ul') { closeList(); out.push('<ul class="md-ul">'); list = 'ul'; } out.push('<li>' + ul[1] + '</li>'); }
+    else if (ol !== null) { if (list !== 'ol') { closeList(); out.push('<ol class="md-ol">'); list = 'ol'; } out.push('<li>' + ol[1] + '</li>'); }
+    else if (bq !== null) { closeList(); out.push('<blockquote class="md-bq">' + bq[1] + '</blockquote>'); }
+    else if (/^-{3,}$/.test(line.trim())) { closeList(); out.push('<hr class="md-hr"/>'); }
+    else if (line.trim() === '') { closeList(); out.push('<br/>'); }
+    else { closeList(); out.push('<div class="md-p">' + line + '</div>'); }
+  }
+  closeList();
+  let html = out.join('');
+  html = html.replace(new RegExp(NUL + 'CB([0-9]+)' + NUL, 'g'), (_m, i: string) => blocks[+i]);
+  return html;
+}
+
+/** 助手气泡内容：思考块（可折叠）+ Markdown 正文；流式期间反复调用 */
+function assistantHtml(reasoning: string, content: string): string {
+  let h = '';
+  if (reasoning !== '') h += '<details class="md-think"><summary>思考</summary><pre>' + mdEscape(reasoning) + '</pre></details>';
+  h += content !== '' ? renderMarkdown(content) : '<span class="muted">…</span>';
+  return h;
+}
+
+import '../tmp-md.css';
+
 async function chatSend(): Promise<void> {
   const ta = $<HTMLTextAreaElement>('chat-text');
   const text = ta.value.trim();
@@ -543,6 +595,8 @@ async function chatSend(): Promise<void> {
       return;
     }
     let acc = '';
+    let reasoning = '';
+    let dirty = false;
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
     let buf = '';
@@ -559,13 +613,24 @@ async function chatSend(): Promise<void> {
         const data = dataLine.slice(5).replace(/^ /, '');
         if (data === '[DONE]') continue;
         try {
-          const obj = JSON.parse(data) as { choices?: { delta?: { content?: unknown } }[] };
-          const c = obj.choices?.[0]?.delta?.content;
-          if (typeof c === 'string') { acc += c; bubble.textContent = acc; };
+          const obj = JSON.parse(data) as { choices?: { delta?: { content?: unknown; reasoning_content?: unknown } }[] };
+          const delta = obj.choices?.[0]?.delta;
+          const c = typeof delta?.content === 'string' ? delta.content : '';
+          const rc = typeof delta?.reasoning_content === 'string' ? delta.reasoning_content : '';
+          if (c !== '') acc += c;
+          if (rc !== '') reasoning += rc;
+          if (c !== '' || rc !== '') dirty = true;
         } catch { /* 非 JSON 块跳过 */ }
       }
+      if (dirty) {
+        dirty = false;
+        bubble.innerHTML = assistantHtml(reasoning, acc);
+        const host = $<HTMLDivElement>('chat-msgs');
+        host.scrollTop = host.scrollHeight;
+      }
     }
-    if (acc === '') bubble.textContent = '（空响应）';
+    if (acc === '' && reasoning === '') bubble.textContent = '（空响应）';
+    else bubble.innerHTML = assistantHtml(reasoning, acc);
     chatHistory.push({ role: 'assistant', content: acc });
   } catch (e) {
     bubble.textContent = `网络错误: ${String(e)}`;

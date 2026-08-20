@@ -114,6 +114,7 @@ export function buildArgs(form: FormValues, model: ModelRef, internalPort: numbe
 
   // 上下文组
   str('ctxSize', '--ctx-size');
+  str('ctxCheckpoints', '--ctx-checkpoints');
   str('parallel', '--parallel');
   str('batchSize', '--batch-size');
   str('ubatchSize', '--ubatch-size');
