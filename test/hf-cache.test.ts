@@ -25,6 +25,12 @@ beforeAll(() => {
     ['GLM-4.7-Flash-GGUF-Q4_K_M.gguf', 'GLM-4.7-Flash-GGUF-Q8_0.gguf', 'mmproj-F16.gguf']);
   mkRepo('user/NoQuant', COMMIT, ['model.gguf']);
   mkRepo('user/BadRef', COMMIT, ['a.gguf'], 'not-a-commit');
+  // refs/main 与 snapshots 目录名不匹配（refs 更新但快照未同步）→ 回退任选含 .gguf 的快照
+  const mm = path.join(root, 'models--user--RefMismatch');
+  fs.mkdirSync(path.join(mm, 'snapshots', 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'), { recursive: true });
+  fs.writeFileSync(path.join(mm, 'snapshots', 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', 'model.gguf'), 'gguf');
+  fs.mkdirSync(path.join(mm, 'refs'), { recursive: true });
+  fs.writeFileSync(path.join(mm, 'refs', 'main'), COMMIT + '\n'); // COMMIT ≠ deadbeef…
   mkRepo('user/NoGguf', COMMIT, ['readme.txt']);
   // 有 refs 无 snapshots 目录 → 排除
   const d = path.join(root, 'models--user--NoSnapDir');
@@ -101,9 +107,18 @@ describe('scanHfCache', () => {
     expect(m.mmproj).toBe(false);
   });
 
-  it('excludes: bad ref, no snapshots dir, no gguf', () => {
+  it('refs/snapshots mismatch → falls back to any snapshot with gguf', () => {
+    const m = scanHfCache(root).find(x => x.repo === 'user/RefMismatch')!;
+    expect(m).toBeTruthy();
+    expect(m.path).toContain('deadbeefdeadbeefdeadbeefdeadbeefdeadbeef');
+  });
+
+  it('excludes only: no snapshots dir, empty snapshot; fallback rescues bad-ref repo', () => {
     const repos = scanHfCache(root).map(x => x.repo);
-    expect(repos).toEqual(['ggml-org/GLM-4.7-Flash-GGUF', 'user/NoQuant']);
+    // BadRef：refs 无效但快照含 gguf → 回退后可见（行为变更，见交付后修正）
+    expect(repos).toEqual(['ggml-org/GLM-4.7-Flash-GGUF', 'user/BadRef', 'user/NoQuant', 'user/RefMismatch']);
+    expect(repos).not.toContain('user/NoSnapDir');
+    expect(repos).not.toContain('user/NoGguf');
   });
 
   it('missing dir -> empty', () => {
@@ -120,7 +135,7 @@ describe('union + resolve', () => {
     const u = buildModelUnion(local, scanHfCache(root));
     const hit = u.find(r => r.name.toLowerCase() === 'glm-4.7-flash-gguf')!;
     expect(hit.source).toBe('local');
-    expect(u).toHaveLength(2); // local GLM + hf user/NoQuant (ggml-org repo shadowed)
+    expect(u).toHaveLength(4); // local GLM + hf user/BadRef + user/NoQuant + user/RefMismatch (ggml-org repo shadowed)
   });
 
   it('resolve: plain name, case-insensitive, quant suffix stripped', () => {

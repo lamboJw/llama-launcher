@@ -55,9 +55,24 @@ export function scanHfCache(hfDir: string): HfModel[] {
     const repo = parseRepoFromDirName(e.name);
     if (!repo) continue;
     const commit = readCommit(dir);
-    if (!commit) continue;
-    const snap = path.join(dir, 'snapshots', commit);
-    if (!fs.existsSync(snap) || !fs.statSync(snap).isDirectory()) continue;
+    let snap: string | null = null;
+    if (commit) {
+      const p = path.join(dir, 'snapshots', commit);
+      if (fs.existsSync(p) && fs.statSync(p).isDirectory()) snap = p;
+    }
+    if (!snap) {
+      // 回退：refs 指向的提交与 snapshots/ 目录名不匹配（refs 更新但快照未同步）→ 任选含 .gguf 的快照
+      const snapsDir = path.join(dir, 'snapshots');
+      let entries: string[] = [];
+      try { entries = fs.readdirSync(snapsDir); } catch { entries = []; }
+      for (const s of entries) {
+        const p = path.join(snapsDir, s);
+        try {
+          if (fs.statSync(p).isDirectory() && fs.readdirSync(p).some((f) => /\.gguf$/i.test(f))) { snap = p; break; }
+        } catch { /* 目录不可读则跳过 */ }
+      }
+    }
+    if (!snap) continue;
     const files = fs.readdirSync(snap).filter(f => /\.gguf$/i.test(f));
     if (files.length === 0) continue;
     const ggufs = files.filter(f => !/mmproj/i.test(f)); // mmproj 不算量化

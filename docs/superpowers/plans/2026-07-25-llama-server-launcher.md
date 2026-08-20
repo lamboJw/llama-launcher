@@ -6454,3 +6454,4 @@ git add -A && git commit -m "package: electron-builder dir + portable zip script
 - **自定义 exe 自动注入托管 CUDA 目录**：`StartRequest.fallbackCudaDirs`（尽力而为，缺失不报错）；`findManagedCudaDirs` 扫描 `llama.cpp/cuda/cuda-*` 中含 cudart64_*.dll 的目录（版本降序全部注入）。
 - **CUDA 目录 spawn 前预检 + cwd 双保险**：`checkCudaDir` 对托管 CUDA 目录严格校验（缺失/无 cudart → 中文报错，不再弹系统对话框）；实测确认 Windows 上 PATH 前置注入与 cwd 均能解析 cudart（`--list-devices` 场景 A/B/C）。
 - **zip-release 抗锁**：`release/llama-launcher/` 被运行中实例占用时不再崩溃（rename/rm 容错，回退 adm-zip 在 zip 内重根）。
+- **HF 快照回退（refs 与快照目录不匹配）**：实测用户缓存 `H:\models` 中 `unsloth/Qwen3.8-27B-GGUF` 的 `refs/main` 指向 `f1bfb127…` 而 `snapshots/` 实际目录为 `fe1e2a23…`（refs 更新但快照未同步），原实现严格要求 `snapshots/<refs提交>/` 存在导致该模型被跳过。现回退：refs 解析失败时扫描 `snapshots/` 下任意含 .gguf 的子目录；连带行为变化——refs 无效但快照含真实 gguf 的仓库（如 BadRef fixture）也会被列出（原测试期望已同步更新）。另：HF 扫描不再依赖 autoSwitch（见上一条）。
