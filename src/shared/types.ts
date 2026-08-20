@@ -63,7 +63,7 @@ export interface FormValues {
   scanDir: string; exeSelection: string; recordsMaxTotalBytes: number;
 }
 
-export interface Settings { form: FormValues }
+export interface Settings { form: FormValues; lastModel?: string }
 
 export interface TimingEvent {
   kind: 'prompt' | 'eval';

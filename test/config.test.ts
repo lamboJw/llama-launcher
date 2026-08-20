@@ -58,6 +58,37 @@ describe('AppConfig', () => {
     expect(c2.getSettings().form.visiblePort).toBe(9000);
     expect(c2.getSettings().form.proxyHost).toBe('127.0.0.1');
   });
+
+  it('lastModel 默认空串，setLastModel 持久化跨实例（记住上次模型）', () => {
+    const d = tmpdir();
+    const c1 = new AppConfig(d);
+    expect(c1.getSettings().lastModel).toBe('');
+    c1.setLastModel('Qwen3.8-27B');
+    const c2 = new AppConfig(d);
+    expect(c2.getSettings().lastModel).toBe('Qwen3.8-27B');
+    expect(c2.getSettings().form.visiblePort).toBe(8080);
+  });
+
+  it('saveSettings 保留 lastModel（启动存 form 时不丢模型记忆）', () => {
+    const d = tmpdir();
+    const c1 = new AppConfig(d);
+    c1.setLastModel('m1');
+    c1.saveSettings({ form: c1.getSettings().form, lastModel: 'm1' });
+    const c2 = new AppConfig(d);
+    expect(c2.getSettings().lastModel).toBe('m1');
+  });
+
+  it('旧配置（无 lastModel 字段）读回补默认空串', () => {
+    const d = tmpdir();
+    const c1 = new AppConfig(d);
+    c1.updateForm({ visiblePort: 8080 }); // 落盘旧形态
+    const file = path.join(d, 'config.json');
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    delete raw.lastModel;
+    fs.writeFileSync(file, JSON.stringify(raw));
+    const c2 = new AppConfig(d);
+    expect(c2.getSettings().lastModel).toBe('');
+  });
 });
 
 describe('migrateForm（旧版布尔配置迁移）', () => {

@@ -170,6 +170,8 @@ async function refreshInstalled(): Promise<void> {
 
 // ---------- 启动 / 停止（规格 §2.2/§2.3） ----------
 async function startServer(form: FormValues, model: ModelRef): Promise<void> {
+  // 重启场景：旧 server 仍在跑（含崩溃残留占端口）→ 先停掉释放端口，再走正常启动
+  if (ctl.getState().status !== 'stopped') await stopServer();
   if (!(await isPortFree(form.visiblePort))) {
     throw new Error(`可见端口 ${form.visiblePort} 已被占用，请在"服务"组更换端口`);
   }
@@ -188,7 +190,7 @@ async function startServer(form: FormValues, model: ModelRef): Promise<void> {
   // 启动即保存 profile（规格 §5.1）
   const key = model.local ? model.local.path : model.name;
   await profiles.save(key, form);
-  config.saveSettings({ form });
+  config.saveSettings({ form, lastModel: model.name }); // 记住上次使用的模型
   // 版本探针 + 横幅（规格 §9.1）
   versionInfo = await probeVersion(exe);
   versionMsg = versionBanner(versionInfo);
@@ -227,6 +229,7 @@ function registerIpc(): void {
     return {
       appRoot: appRoot(),
       form,
+      lastModel: config.getSettings().lastModel ?? '',
       server: ctl.getState(),
       localModels,
       hfModels,
@@ -262,6 +265,10 @@ function registerIpc(): void {
 
   ipcMain.handle('server:stop', async () => {
     await stopServer();
+  });
+
+  ipcMain.handle('model:set', async (_e, name: string) => {
+    if (name) config.setLastModel(name); // 手动切换模型 → 记住
   });
 
   ipcMain.handle('form:save', async (_e, form: FormValues) => {

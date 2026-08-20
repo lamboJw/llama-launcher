@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('llama', {
   scanHf: (dir: string): Promise<unknown> => ipcRenderer.invoke('hf:scan', dir),
   startServer: (form: unknown, model: unknown): Promise<void> => ipcRenderer.invoke('server:start', { form, model }),
   stopServer: (): Promise<void> => ipcRenderer.invoke('server:stop'),
+  setModel: (name: string): Promise<void> => ipcRenderer.invoke('model:set', name),
   saveForm: (form: unknown): Promise<void> => ipcRenderer.invoke('form:save', form),
   listProfiles: (): Promise<unknown> => ipcRenderer.invoke('profiles:list'),
   saveProfile: (model: string, params: unknown): Promise<void> => ipcRenderer.invoke('profiles:save', { model, params }),

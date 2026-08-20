@@ -109,7 +109,7 @@ export class AppConfig {
   private store: JsonStore<Settings>;
 
   constructor(dir?: string) {
-    this.store = new JsonStore<Settings>(dir ?? defaultConfigDir(), 'config', { form: { ...DEFAULT_FORM } });
+    this.store = new JsonStore<Settings>(dir ?? defaultConfigDir(), 'config', { form: { ...DEFAULT_FORM }, lastModel: '' });
     const cur = this.store.get().form;
     const fixed = migrateForm(cur);
     if (JSON.stringify(fixed) !== JSON.stringify(cur)) this.store.set({ form: fixed });
@@ -117,7 +117,15 @@ export class AppConfig {
 
   getSettings(): Settings { return this.store.get(); }
 
-  saveSettings(s: Settings): void { this.store.set({ form: s.form }); }
+  saveSettings(s: Settings): void {
+    const cur = this.store.get();
+    this.store.set({ form: s.form, lastModel: s.lastModel ?? cur.lastModel ?? '' });
+  }
+
+  setLastModel(name: string): void {
+    const cur = this.store.get();
+    this.store.set({ form: cur.form, lastModel: name });
+  }
 
   updateForm(patch: Partial<FormValues>): FormValues {
     const cur = this.store.get();

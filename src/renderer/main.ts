@@ -5,6 +5,7 @@ import type { FormValues, ModelRef, ServerState, Profile, RoundRecord, RoundStat
 interface BootState {
   appRoot: string;
   form: FormValues;
+  lastModel: string;
   server: ServerState;
   union: ModelRef[];
   installed: InstalledVersion[];
@@ -22,6 +23,7 @@ declare global {
       scanModels(dir: string): Promise<unknown>;
       startServer(form: FormValues, model: ModelRef): Promise<void>;
       stopServer(): Promise<void>;
+      setModel(name: string): Promise<void>;
       saveForm(form: FormValues): Promise<void>;
       listProfiles(): Promise<Profile[]>;
       saveProfile(model: string, params: FormValues): Promise<void>;
@@ -789,6 +791,23 @@ function wireButtons(): void {
   $<HTMLSelectElement>('profile-select').addEventListener('change', function (this: HTMLSelectElement) {
     this.title = (this.options[this.selectedIndex]?.title as string | undefined) ?? '';
   });
+// 手动切换模型：记住 + 存在 profile 时自动应用（规格 §5.1）
+modelSelect.addEventListener('change', async () => {
+  const name = modelSelect.value;
+  if (!name) return;
+  void window.llama.setModel(name);
+  const key = currentModelKey();
+  if (key && form) {
+    try {
+      const p = await window.llama.loadProfile(key);
+      if (p && p.params) {
+        form = { ...form, ...p.params };
+        populateForm();
+        scheduleSave();
+      }
+    } catch { /* profile 读取失败不阻塞切换 */ }
+  }
+});
 $<HTMLButtonElement>('btn-profile-apply').addEventListener('click', async () => {
     const key = $<HTMLSelectElement>('profile-select').value;
     if (!key || !form) return;
@@ -838,7 +857,7 @@ async function main(): Promise<void> {
   recordsDir = s.recordsDir;
   installed = s.installed;
   populateForm();
-  buildModelSelect(s.server.model);
+  buildModelSelect(s.lastModel || s.server.model); // 记住上次使用的模型（stopped 时 server.model 为 null）
   renderState(s.server);
   renderBanner(s.banner);
   renderStats(s.stats.latest, s.stats.history);
