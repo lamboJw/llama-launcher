@@ -30,6 +30,7 @@ declare global {
       checkUpdate(): Promise<{ latest: { tag_name: string; assets: unknown[] } | null; installed: InstalledVersion[] }>;
       runUpdate(tag: string): Promise<{ ok: boolean; error?: string }>;
       openDirDialog(defaultPath?: string): Promise<string | null>;
+      pickFile(): Promise<string | null>;
       recordFiles(): Promise<string[]>;
       recordsTail(page: number): Promise<{ records: RoundRecord[]; hasMore: boolean }>;
       on(channel: string, cb: (payload: unknown) => void): () => void;
@@ -258,7 +259,16 @@ function buildExeField(): HTMLElement {
   };
   sel.addEventListener('change', sync);
   input.addEventListener('change', sync);
+  const btn2 = document.createElement('button');
+  btn2.textContent = '浏览…';
+  btn2.style.padding = '3px 8px';
+  btn2.addEventListener('click', async () => {
+    const f = await window.llama.pickFile();
+    if (f !== null) { input.value = f; sync(); }
+  });
+  row2.appendChild(btn2);
   (sel as HTMLSelectElement & { __sync?: () => void }).__sync = sync;
+  row.appendChild(row2); // 修复：自定义路径输入行此前未挂载到 DOM，选「自定义路径…」后无处填写
   return row;
 }
 

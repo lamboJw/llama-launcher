@@ -331,6 +331,17 @@ function registerIpc(): void {
     return r.canceled ? null : r.filePaths[0];
   });
 
+  ipcMain.handle('dialog:file', async () => {
+    if (!win) return null;
+    const r = await dialog.showOpenDialog(win, {
+      title: '选择 llama-server.exe',
+      defaultPath: appRoot(),
+      properties: ['openFile'],
+      filters: [{ name: '可执行文件', extensions: ['exe'] }],
+    });
+    return r.canceled ? null : r.filePaths[0];
+  });
+
   ipcMain.handle('stats:get', async () => ({ latest: stats.getLatest(), history: stats.getHistory().slice(-20) }));
 }
 

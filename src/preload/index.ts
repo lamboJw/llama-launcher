@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('llama', {
   checkUpdate: (): Promise<unknown> => ipcRenderer.invoke('updater:check'),
   runUpdate: (tag: string): Promise<unknown> => ipcRenderer.invoke('updater:run', tag),
   openDirDialog: (defaultPath?: string): Promise<string | null> => ipcRenderer.invoke('dialog:dir', defaultPath),
+  pickFile: (): Promise<string | null> => ipcRenderer.invoke('dialog:file'),
   getStats: (): Promise<unknown> => ipcRenderer.invoke('stats:get'),
   on: (channel: string, cb: (payload: unknown) => void): (() => void) => {
     if (!(EVENTS as readonly string[]).includes(channel)) return () => {};
