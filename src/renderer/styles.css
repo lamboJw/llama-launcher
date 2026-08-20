@@ -6,6 +6,8 @@ button:disabled { opacity: 0.45; cursor: default; }
 button.stop { background: #8a3a3a; }
 select, input[type="text"], input[type="number"] { background: #1a1b1e; border: 1px solid #3a3b40; color: #d4d4d4; padding: 3px 6px; border-radius: 3px; font-size: 13px; }
 .muted { color: #7f848e; font-size: 12px; }
+#save-hint { min-height: 1.2em; padding: 2px 4px; }
+#save-hint.ok { color: #98c379; }
 .banner { font-size: 12px; padding: 2px 8px; border-radius: 4px; }
 .banner:empty { display: none; }
 .banner.warn { background: #7a1f24; color: #ffb3b8; }

@@ -313,12 +313,27 @@ function populateForm(): void {
   (document.getElementById('exe-select') as HTMLSelectElement & { __sync?: () => void })?.__sync?.();
 }
 
-// ---------- 保存（防抖 600ms） ----------
+// ---------- 保存（防抖 600ms，成功后提示「已自动保存」） ----------
+let hintTimer: ReturnType<typeof setTimeout> | null = null;
+function showSaveHint(): void {
+  const el = $<HTMLDivElement>('save-hint');
+  const t = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  el.textContent = `设置已自动保存 ${t}`;
+  el.classList.add('ok');
+  if (hintTimer) clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => {
+    el.textContent = '';
+    el.classList.remove('ok');
+  }, 3000);
+}
 function scheduleSave(): void {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    if (form) void window.llama.saveForm(form).catch((e) => showTopError(`保存设置失败: ${String(e)}`));
+    if (!form) return;
+    void window.llama.saveForm(form)
+      .then(() => showSaveHint())
+      .catch((e) => showTopError(`保存设置失败: ${String(e)}`));
   }, 600);
 }
 
@@ -697,7 +712,7 @@ function wireButtons(): void {
   });
   $<HTMLButtonElement>('btn-profile-save').addEventListener('click', async () => {
     const key = currentModelKey();
-    if (!key || !form) { showTopError('未选择模型，无法保存参数组'); return; }
+    if (!key || !form) { showTopError('未选择模型：请先在顶部模型下拉框选择模型，再保存参数组'); return; }
     await window.llama.saveProfile(key, form);
     await refreshProfiles();
   });
