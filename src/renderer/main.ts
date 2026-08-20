@@ -569,7 +569,6 @@ function assistantHtml(reasoning: string, content: string): string {
   return h;
 }
 
-import '../tmp-md.css';
 
 async function chatSend(): Promise<void> {
   const ta = $<HTMLTextAreaElement>('chat-text');

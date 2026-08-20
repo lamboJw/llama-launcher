@@ -7,7 +7,7 @@ const src = path.join(root, 'src', 'renderer');
 const out = path.join(root, 'dist', 'renderer');
 
 mkdirSync(out, { recursive: true });
-for (const f of ['index.html', 'styles.css']) {
+for (const f of ['index.html', 'styles.css', 'md.css']) {
   const p = path.join(src, f);
   if (existsSync(p)) cpSync(p, path.join(out, f));
 }
