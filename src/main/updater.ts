@@ -10,7 +10,10 @@ import AdmZip from 'adm-zip';
 import { parseVersion } from './version.js';
 import type { InstalledVersion, UpdateProgress } from '../shared/types.js';
 
-export const GITHUB_LATEST_URL = 'https://api.github.com/repos/ggml-org/llama.cpp/releases/latest';
+// b 系列构建全是 prerelease，/releases/latest 会跳过 → 用 releases 列表取最新 b 标签
+export const GITHUB_RELEASES_URL = 'https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30';
+// GitHub API 无 User-Agent 直接 403（Node 原生 https 默认不带）
+const USER_AGENT = 'llama-launcher';
 export const MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024; // 2GB（zip + 解压峰值）
 
 export interface ReleaseAsset { name: string; browser_download_url: string; size?: number }
@@ -69,6 +72,7 @@ async function httpGetText(url: string, timeoutMs: number): Promise<string> {
         port: u.port || (u.protocol === 'https:' ? 443 : 80),
         path: u.pathname + u.search,
         agent: false,
+        headers: { 'user-agent': USER_AGENT },
       },
       (res) => {
         if (res.statusCode !== 200) {
@@ -86,13 +90,15 @@ async function httpGetText(url: string, timeoutMs: number): Promise<string> {
   });
 }
 
-/** 拉取最新 release；网络失败 / 非 200 → null（不阻塞任何功能） */
-export async function checkLatestRelease(url: string = GITHUB_LATEST_URL, timeoutMs = 10000): Promise<ReleaseInfo | null> {
+/** 拉取最新 b 系列 release（列表按新到旧排序，跳过非 b 标签与 draft）；网络失败 / 非 200 / 无 b 版本 → null（不阻塞任何功能） */
+export async function checkLatestRelease(url: string = GITHUB_RELEASES_URL, timeoutMs = 10000): Promise<ReleaseInfo | null> {
   try {
     const body = await httpGetText(url, timeoutMs);
-    const info = JSON.parse(body) as ReleaseInfo;
-    if (typeof info.tag_name !== 'string' || !Array.isArray(info.assets)) return null;
-    return info;
+    const list = JSON.parse(body) as (ReleaseInfo & { draft?: boolean })[];
+    if (!Array.isArray(list)) return null;
+    const hit = list.find((r) => !r.draft && typeof r.tag_name === 'string' && /^b\d+$/.test(r.tag_name));
+    if (!hit || !Array.isArray(hit.assets)) return null;
+    return { tag_name: hit.tag_name, assets: hit.assets };
   } catch {
     return null;
   }
@@ -121,6 +127,7 @@ async function downloadOnce(
   part: string,
   offset: number,
   onProgress?: (p: DownloadProgress) => void,
+  redirectsLeft = 5,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
@@ -144,10 +151,19 @@ async function downloadOnce(
         path: u.pathname + u.search,
         method: 'GET',
         agent: false,
-        headers: offset > 0 ? { range: `bytes=${offset}-` } : {},
+        headers: { 'user-agent': USER_AGENT, ...(offset > 0 ? { range: `bytes=${offset}-` } : {}) },
       },
       (res) => {
         const code = res.statusCode ?? 0;
+        // GitHub 下载 URL 302 到 release-assets CDN → 跟随（保留 Range 续传语义）
+        if (code === 301 || code === 302 || code === 303 || code === 307 || code === 308) {
+          const loc = res.headers.location;
+          res.resume();
+          if (!loc || redirectsLeft <= 0) { fl.close(); fail(new Error(`download failed: HTTP ${code}`)); return; }
+          fl.close();
+          downloadOnce(new URL(loc, url).toString(), part, offset, onProgress, redirectsLeft - 1).then(resolve, reject);
+          return;
+        }
         if ((code === 200 || code === 416) && offset > 0) {
           // 服务器忽略 Range（或 .part 比远端文件还大）→ 从头重下
           res.resume();
@@ -345,6 +361,13 @@ export async function runUpdate(opts: RunUpdateOptions): Promise<RunUpdateResult
   const fail = (phase: UpdateProgress['phase'], error: string, cudaVersion: string | null = null, mainFellBack = false): RunUpdateResult =>
     ({ ok: false, valid: false, phase, error, cudaVersion, mainFellBack });
   try {
+    // 0. 目录预检：baseDir 不存在 → 创建（首次启动尚未启动过服务）；创建失败 → 明确报错（否则 statfs ENOENT）
+    report('check', -1, 0, '目录预检');
+    try {
+      await fs.mkdir(opts.baseDir, { recursive: true });
+    } catch (e) {
+      return fail('error', `llama.cpp 目录不可用: ${(e as Error).message}`);
+    }
     // 1. 磁盘预检
     const minFree = opts.minFreeBytes ?? MIN_FREE_BYTES;
     report('check', -1, 0, '磁盘预检');

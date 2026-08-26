@@ -318,7 +318,7 @@ function registerIpc(): void {
     lastRelease = latest;
     updateMsg = latest && !installed.some((v) => v.tag === latest.tag_name) ? `发现新版本 ${latest.tag_name}` : null;
     refreshBanner();
-    return { latest, installed };
+    return { latest, installed, failed: latest === null };
   });
 
   ipcMain.handle('updater:run', async (_e, tag: string) => {

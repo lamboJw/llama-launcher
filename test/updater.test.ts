@@ -165,6 +165,25 @@ describe('downloadFile', () => {
     await expect(stat(dest + '.part')).resolves.toBeTruthy();
     await closeServer(server);
   });
+
+  it('follows 302 redirects (GitHub download URLs redirect to release assets CDN)', async () => {
+    const buf = Buffer.from('redirected-content');
+    const target = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-length': String(buf.length) });
+      res.end(buf);
+    });
+    const targetPort = await listen(target);
+    const server = http.createServer((_req, res) => {
+      res.writeHead(302, { location: `http://127.0.0.1:${targetPort}/file.bin` });
+      res.end();
+    });
+    const port = await listen(server);
+    const dest = path.join(dir, 'e.bin');
+    await downloadFile({ url: `http://127.0.0.1:${port}/file.bin`, dest });
+    expect(await readFile(dest)).toEqual(buf);
+    await closeServer(server);
+    await closeServer(target);
+  });
 });
 
 describe('extractZip', () => {
@@ -234,19 +253,48 @@ describe('pruneVersions', () => {
 });
 
 describe('checkLatestRelease', () => {
-  it('parses the latest release from the API', async () => {
+  it('parses the latest b-tag release from the releases list', async () => {
     const server = http.createServer((_req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({
-        tag_name: 'b10500',
-        assets: [{ name: 'llama-b10500-bin-win-cuda-13.3-x64.zip', browser_download_url: 'http://x/y.zip' }],
-      }));
+      res.end(JSON.stringify([
+        { tag_name: 'b10501', draft: false, assets: [{ name: 'llama-b10501-bin-win-cuda-13.3-x64.zip', browser_download_url: 'http://x/y.zip' }] },
+        { tag_name: 'b10500', draft: false, assets: [{ name: 'llama-b10500-bin-win-cuda-13.3-x64.zip', browser_download_url: 'http://x/y.zip' }] },
+      ]));
     });
     const port = await listen(server);
-    const info = await checkLatestRelease(`http://127.0.0.1:${port}/releases/latest`);
+    const info = await checkLatestRelease(`http://127.0.0.1:${port}/releases`);
+    expect(info).not.toBeNull();
+    expect(info!.tag_name).toBe('b10501');
+    expect(info!.assets).toHaveLength(1);
+    await closeServer(server);
+  });
+
+  it('sends a User-Agent header (GitHub 403s without one)', async () => {
+    const server = http.createServer((req, res) => {
+      if (!req.headers['user-agent']) { res.writeHead(403); res.end('no user-agent'); return; }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify([{ tag_name: 'b10500', draft: false, assets: [] }]));
+    });
+    const port = await listen(server);
+    const info = await checkLatestRelease(`http://127.0.0.1:${port}/releases`);
     expect(info).not.toBeNull();
     expect(info!.tag_name).toBe('b10500');
-    expect(info!.assets).toHaveLength(1);
+    await closeServer(server);
+  });
+
+  it('skips non-b tags and drafts, picks the newest b build', async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify([
+        { tag_name: 'v0.3.0', draft: false, assets: [{ name: 'nightly-tag.txt', browser_download_url: 'http://x/t.txt' }] },
+        { tag_name: 'b10633', draft: true, assets: [] },
+        { tag_name: 'b10632', draft: false, assets: [{ name: 'llama-b10632-bin-win-cuda-13.3-x64.zip', browser_download_url: 'http://x/y.zip' }] },
+      ]));
+    });
+    const port = await listen(server);
+    const info = await checkLatestRelease(`http://127.0.0.1:${port}/releases`);
+    expect(info).not.toBeNull();
+    expect(info!.tag_name).toBe('b10632');
     await closeServer(server);
   });
 
@@ -360,6 +408,34 @@ describe('runUpdate', () => {
       await closeServer(server);
     } finally {
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('creates baseDir when missing (first launch, llama.cpp not yet created)', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'upd-run-'));
+    try {
+      const { mainBuf, cudaBuf } = makeFixtures();
+      const hits: Record<string, number> = {};
+      const { port, server } = await serveFiles({
+        'llama-b10488-bin-win-cuda-13.3-x64.zip': mainBuf,
+        'cudart-llama-bin-win-cuda-13.3-x64.zip': cudaBuf,
+      }, hits);
+      const baseDir = path.join(root, 'llama.cpp');
+      await expect(stat(baseDir)).rejects.toThrow();
+      const res = await runUpdate({
+        baseDir,
+        tag: 'b10488',
+        assets: withUrls(port),
+        selectedTag: null,
+        minFreeBytes: 1024 * 1024,
+        verify: async () => {},
+      });
+      expect(res.ok).toBe(true);
+      expect(res.valid).toBe(true);
+      await expect(stat(path.join(baseDir, 'b10488', exeName()))).resolves.toBeTruthy();
+      await closeServer(server);
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 

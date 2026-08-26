@@ -29,7 +29,7 @@ declare global {
       saveProfile(model: string, params: FormValues): Promise<void>;
       loadProfile(model: string): Promise<Profile | null>;
       deleteProfile(model: string): Promise<void>;
-      checkUpdate(): Promise<{ latest: { tag_name: string; assets: unknown[] } | null; installed: InstalledVersion[] }>;
+      checkUpdate(): Promise<{ latest: { tag_name: string; assets: unknown[] } | null; installed: InstalledVersion[]; failed: boolean }>;
       runUpdate(tag: string): Promise<{ ok: boolean; error?: string }>;
       openDirDialog(defaultPath?: string): Promise<string | null>;
       pickFile(): Promise<string | null>;
@@ -479,7 +479,7 @@ async function doCheckUpdate(): Promise<void> {
     latestTag = r.latest ? r.latest.tag_name : null;
     const run = $<HTMLButtonElement>('btn-update-run');
     run.disabled = latestTag === null;
-    st.textContent = latestTag ? `最新版本 ${latestTag}` : '已是最新';
+    st.textContent = r.failed ? '检查更新失败' : latestTag ? `最新版本 ${latestTag}` : '已是最新';
     fillExeOptions();
   } catch (e) {
     st.textContent = `检查失败: ${String(e)}`;
@@ -729,7 +729,7 @@ function subscribeEvents(): void {
   window.llama.on('update:progress', (p) => {
     const u = p as UpdateProgress;
     const prog = $<HTMLProgressElement>('update-progress');
-    prog.value = u.pct >= 0 ? u.pct : 0;
+    prog.value = u.pct >= 0 ? u.pct * 100 : 0; // pct 是 0-1 小数，progress max=100
     $<HTMLDivElement>('update-msg').textContent = u.mbps > 0 ? `${u.message}（${u.mbps.toFixed(1)} MB/s）` : u.message;
   });
   window.llama.on('models:changed', (p) => {
@@ -844,9 +844,13 @@ $<HTMLButtonElement>('btn-profile-apply').addEventListener('click', async () => 
     run.disabled = true;
     try {
       const res = await window.llama.runUpdate(latestTag);
-      $<HTMLDivElement>('update-status').textContent = res.ok ? `更新完成（${latestTag}）` : `更新失败: ${res.error ?? '未知错误'}`;
-      run.disabled = false;
-      fillExeOptions();
+      if (res.ok) {
+        await doCheckUpdate(); // 刷新 installed 列表 + 版本选项 + 状态文案
+      } else {
+        $<HTMLDivElement>('update-status').textContent = `更新失败: ${res.error ?? '未知错误'}`;
+        run.disabled = false;
+        fillExeOptions();
+      }
     } catch (e) {
       $<HTMLDivElement>('update-status').textContent = `更新失败: ${String(e)}`;
       run.disabled = false;
