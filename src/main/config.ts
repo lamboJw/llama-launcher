@@ -91,6 +91,30 @@ export function resolveDataDir(dataDir: string, appDataDir: string): string {
 }
 
 /**
+ * 旧版数据一次性迁移（%APPDATA%/llama-launcher → 新位置）：
+ * 复制不移动；目标已存在即跳过（幂等）；单项失败仅警告不抛异常
+ */
+export function migrateLegacyData(oldDir: string, newDir: string): void {
+  if (oldDir === newDir) return;
+  const copyFile = (src: string, dst: string): void => {
+    try {
+      if (!fs.existsSync(dst) && fs.existsSync(src)) {
+        fs.mkdirSync(path.dirname(dst), { recursive: true });
+        fs.copyFileSync(src, dst);
+      }
+    } catch (e) { console.warn(`[migrateLegacyData] 复制 ${src} 失败: ${String(e)}`); }
+  };
+  const copyDir = (src: string, dst: string): void => {
+    try {
+      if (!fs.existsSync(dst) && fs.existsSync(src)) fs.cpSync(src, dst, { recursive: true });
+    } catch (e) { console.warn(`[migrateLegacyData] 复制 ${src} 失败: ${String(e)}`); }
+  };
+  copyFile(path.join(oldDir, 'config.json'), path.join(newDir, 'config.json'));
+  copyDir(path.join(oldDir, 'profiles'), path.join(newDir, 'profiles'));
+  copyDir(path.join(oldDir, 'records'), path.join(newDir, 'records'));
+}
+
+/**
  * 旧版配置迁移：
  * - fit：复选框布尔 → 字符串（true→'on'，false→'off'；llama-server --fit [on|off] 必须带值）
  * - cacheReuse：复选框布尔 → 字符串（--cache-reuse N 必须带数字；布尔无法忠实表达 → 置空=off）
