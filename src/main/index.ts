@@ -35,7 +35,7 @@ const config = new AppConfig(appDataDir);
 const dataDir = (() => {
   const d = resolveDataDir(config.getSettings().form.dataDir, appDataDir);
   try { fs.mkdirSync(d, { recursive: true }); return d; }
-  catch { pushLog(`数据目录 ${d} 不可创建，回退默认 ${appDataDir}`); return appDataDir; }
+  catch { console.warn(`数据目录 ${d} 不可创建，回退默认 ${appDataDir}`); return appDataDir; }
 })();
 app.setPath('userData', path.join(dataDir, 'userData'));
 const profiles = new ProfilesStore(path.join(dataDir, 'profiles'));

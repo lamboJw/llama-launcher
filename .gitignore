@@ -14,3 +14,6 @@ staging/
 
 # local config
 *.local
+
+# runtime data
+app_data/
