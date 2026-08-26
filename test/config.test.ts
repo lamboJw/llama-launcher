@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { AppConfig, JsonStore, migrateForm, DEFAULT_FORM } from '../src/main/config.js';
+import { AppConfig, JsonStore, migrateForm, DEFAULT_FORM, resolveDataDir } from '../src/main/config.js';
 import type { FormValues } from '../shared/types.js';
 
 function tmpdir(): string {
@@ -144,5 +144,21 @@ describe('migrateForm（旧版布尔配置迁移）', () => {
     const raw2 = JSON.parse(fs.readFileSync(file, 'utf8'));
     expect(raw2.form.fit).toBe('on');
     expect(raw2.form.cacheReuse).toBe('');
+  });
+});
+
+describe('resolveDataDir', () => {
+  it('空串/空白 -> 默认目录', () => {
+    expect(resolveDataDir('', 'C:\\app\\app_data')).toBe('C:\\app\\app_data');
+    expect(resolveDataDir('   ', 'C:\\app\\app_data')).toBe('C:\\app\\app_data');
+  });
+
+  it('相对路径 -> path.resolve', () => {
+    expect(resolveDataDir('mydata', 'C:\\app\\app_data')).toBe(path.resolve('mydata'));
+  });
+
+  it('绝对路径 -> 原样', () => {
+    const abs = path.join(os.tmpdir(), 'x');
+    expect(resolveDataDir(abs, 'C:\\app\\app_data')).toBe(abs);
   });
 });

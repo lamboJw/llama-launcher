@@ -84,6 +84,12 @@ export function defaultConfigDir(): string {
   return path.join(appdata, 'llama-launcher');
 }
 
+/** dataDir 解析：空 = 默认 app_data 目录；非空 = resolve（相对路径基于 cwd） */
+export function resolveDataDir(dataDir: string, appDataDir: string): string {
+  const d = dataDir.trim();
+  return d === '' ? appDataDir : path.resolve(d);
+}
+
 /**
  * 旧版配置迁移：
  * - fit：复选框布尔 → 字符串（true→'on'，false→'off'；llama-server --fit [on|off] 必须带值）
