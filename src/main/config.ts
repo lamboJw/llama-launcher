@@ -101,7 +101,7 @@ export function migrateForm(f: FormValues): FormValues {
   // flash-attn 文档枚举为 on|off|auto（0/1 虽被强转接受，统一为文档值）
   if (any.flashAttn === '1') any.flashAttn = 'on';
   else if (any.flashAttn === '0') any.flashAttn = 'off';
-  for (const k of ['tensorSplit', 'specDraftTypeK', 'specDraftTypeV', 'kvUnified'] as const) {
+  for (const k of ['tensorSplit', 'specDraftTypeK', 'specDraftTypeV', 'kvUnified', 'dataDir'] as const) {
     if (typeof any[k] !== 'string') any[k] = '';
   }
   return o;

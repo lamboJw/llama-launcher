@@ -123,6 +123,12 @@ describe('migrateForm（旧版布尔配置迁移）', () => {
     expect(f.tensorSplit).toBe('3,1');
   });
 
+  it('旧配置缺失 dataDir → 补默认空串', () => {
+    const f = migrateForm({ ...DEFAULT_FORM } as Record<string, unknown> as FormValues);
+    delete (f as Record<string, unknown>).dataDir;
+    expect(migrateForm(f).dataDir).toBe('');
+  });
+
   it('AppConfig 启动时迁移落盘的旧配置并写回', () => {
     const d = tmpdir();
     const c1 = new AppConfig(d);
