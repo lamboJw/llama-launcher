@@ -172,6 +172,7 @@ function buildForm(): void {
   appHost.appendChild(buildField({ id: 'autoSwitch', label: '自动切换（代理按请求切模型）', type: 'checkbox' }));
   appHost.appendChild(buildDirField('scanDir', '模型扫描目录'));
   appHost.appendChild(buildDirField('hfCacheDir', 'HF 缓存目录'));
+  appHost.appendChild(buildDirField('dataDir', '数据目录（重启后生效）'));
   appHost.appendChild(buildExeField());
   appHost.appendChild(buildField({ id: 'recordRounds', label: '记录每轮 prompt/decode', type: 'checkbox' }));
   appHost.appendChild(buildField({ id: 'recordsMaxTotalBytes', label: '记录总上限 (MB)', type: 'number' }));
@@ -215,7 +216,7 @@ function buildField(f: FieldSpec): HTMLElement {
   return row;
 }
 
-function buildDirField(id: 'scanDir' | 'hfCacheDir', label: string): HTMLElement {
+function buildDirField(id: 'scanDir' | 'hfCacheDir' | 'dataDir', label: string): HTMLElement {
   const row = document.createElement('div');
   row.className = 'field';
   const lab = document.createElement('label');
@@ -330,6 +331,7 @@ function populateForm(): void {
   if (mbEl) mbEl.value = String(Math.round(form.recordsMaxTotalBytes / 1048576));
   set('scanDir', form.scanDir);
   set('hfCacheDir', form.hfCacheDir);
+  set('dataDir', form.dataDir);
   const autoEl = document.getElementById('f-autoSwitch') as HTMLInputElement | null;
   if (autoEl) autoEl.checked = form.autoSwitch;
   autoSwitchBox.checked = form.autoSwitch;
