@@ -13,13 +13,14 @@ Windows 桌面版 llama-server 启动器（Electron + TypeScript）。一条命�
 - **轮次记录**：可选记录每轮 prompt/decode 的 token 与耗时，倒序分页查看
 - **请求统计**：最近请求与历史统计（耗时、token 数）
 - **llama.cpp 版本管理**：检查 GitHub release、下载安装、多版本共存、版本横幅提示
+- **可设置数据目录**：config / profiles / records 的保存位置可在设置中修改（默认 `app_data/`），修改后重启生效；首次启动自动迁移旧版 `%APPDATA%` 数据
 
 ## 开发
 
 ```bash
 npm install
 npm run dev        # 构建 + 启动 Electron
-npm test           # vitest（160 个测试）
+npm test           # vitest（168 个测试）
 npm run typecheck  # tsc --noEmit
 ```
 
@@ -45,13 +46,17 @@ test/          vitest 测试（纯 Node，不依赖 Electron）
 scripts/       copy-assets、zip-release
 docs/          设计规格与实施计划
 llama.cpp/     托管的 llama.cpp 版本与 CUDA 目录（运行时生成，不入库）
+app_data/      应用数据：config.json、profiles/、records/、userData/（运行时生成，不入库）
 ```
 
 ## 配置位置
 
-- 应用配置：`%APPDATA%/llama-launcher/config.json`（表单 + 上次模型）
-- 参数档案：`%APPDATA%/llama-launcher/profiles/`
-- 轮次记录：`%APPDATA%/llama-launcher/records/`
+- 应用配置：`<app>/app_data/config.json`（表单 + 上次模型）
+- 参数档案：`<数据目录>/profiles/`
+- 轮次记录：`<数据目录>/records/`
+- Chromium 缓存：`<数据目录>/userData/`
+
+`<app>` 为应用所在目录（开发模式为仓库根目录），`<数据目录>` 默认为 `<app>/app_data/`，可在设置「数据目录」中修改（重启后生效）。旧版 `%APPDATA%/llama-launcher/` 的数据在首次启动时自动复制到新位置（复制不移动，旧目录保留）。
 
 ## 技术栈
 
