@@ -42,6 +42,7 @@ export const DEFAULT_FORM: FormValues = {
   // App 级
   autoSwitch: false, hfCacheDir: DEFAULT_HF_CACHE, recordRounds: false,
   scanDir: '', exeSelection: '', recordsMaxTotalBytes: 1024 * 1024 * 1024,
+  dataDir: '',
 };
 
 export class JsonStore<T extends object> {
@@ -83,6 +84,36 @@ export function defaultConfigDir(): string {
   return path.join(appdata, 'llama-launcher');
 }
 
+/** dataDir 解析：空 = 默认 app_data 目录；非空 = resolve（相对路径基于 cwd） */
+export function resolveDataDir(dataDir: string, appDataDir: string): string {
+  const d = dataDir.trim();
+  return d === '' ? appDataDir : path.resolve(d);
+}
+
+/**
+ * 旧版数据一次性迁移（%APPDATA%/llama-launcher → 新位置）：
+ * 复制不移动；目标已存在即跳过（幂等）；单项失败仅警告不抛异常
+ */
+export function migrateLegacyData(oldDir: string, newDir: string): void {
+  if (oldDir === newDir) return;
+  const copyFile = (src: string, dst: string): void => {
+    try {
+      if (!fs.existsSync(dst) && fs.existsSync(src)) {
+        fs.mkdirSync(path.dirname(dst), { recursive: true });
+        fs.copyFileSync(src, dst);
+      }
+    } catch (e) { console.warn(`[migrateLegacyData] 复制 ${src} 失败: ${String(e)}`); }
+  };
+  const copyDir = (src: string, dst: string): void => {
+    try {
+      if (!fs.existsSync(dst) && fs.existsSync(src)) fs.cpSync(src, dst, { recursive: true });
+    } catch (e) { console.warn(`[migrateLegacyData] 复制 ${src} 失败: ${String(e)}`); }
+  };
+  copyFile(path.join(oldDir, 'config.json'), path.join(newDir, 'config.json'));
+  copyDir(path.join(oldDir, 'profiles'), path.join(newDir, 'profiles'));
+  copyDir(path.join(oldDir, 'records'), path.join(newDir, 'records'));
+}
+
 /**
  * 旧版配置迁移：
  * - fit：复选框布尔 → 字符串（true→'on'，false→'off'；llama-server --fit [on|off] 必须带值）
@@ -100,7 +131,7 @@ export function migrateForm(f: FormValues): FormValues {
   // flash-attn 文档枚举为 on|off|auto（0/1 虽被强转接受，统一为文档值）
   if (any.flashAttn === '1') any.flashAttn = 'on';
   else if (any.flashAttn === '0') any.flashAttn = 'off';
-  for (const k of ['tensorSplit', 'specDraftTypeK', 'specDraftTypeV', 'kvUnified'] as const) {
+  for (const k of ['tensorSplit', 'specDraftTypeK', 'specDraftTypeV', 'kvUnified', 'dataDir'] as const) {
     if (typeof any[k] !== 'string') any[k] = '';
   }
   return o;

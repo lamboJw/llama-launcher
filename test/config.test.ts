@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { AppConfig, JsonStore, migrateForm, DEFAULT_FORM } from '../src/main/config.js';
+import { AppConfig, JsonStore, migrateForm, DEFAULT_FORM, resolveDataDir, migrateLegacyData } from '../src/main/config.js';
 import type { FormValues } from '../shared/types.js';
 
 function tmpdir(): string {
@@ -48,6 +48,7 @@ describe('AppConfig', () => {
     expect(f.warmup).toBe(true);
     expect(f.hfCacheDir.length).toBeGreaterThan(0);
     expect(f.timeout).toBe('');
+    expect(f.dataDir).toBe('');
   });
 
   it('updateForm patches and persists across instances', () => {
@@ -122,6 +123,12 @@ describe('migrateForm（旧版布尔配置迁移）', () => {
     expect(f.tensorSplit).toBe('3,1');
   });
 
+  it('旧配置缺失 dataDir → 补默认空串', () => {
+    const f = migrateForm({ ...DEFAULT_FORM } as Record<string, unknown> as FormValues);
+    delete (f as Record<string, unknown>).dataDir;
+    expect(migrateForm(f).dataDir).toBe('');
+  });
+
   it('AppConfig 启动时迁移落盘的旧配置并写回', () => {
     const d = tmpdir();
     const c1 = new AppConfig(d);
@@ -137,5 +144,64 @@ describe('migrateForm（旧版布尔配置迁移）', () => {
     const raw2 = JSON.parse(fs.readFileSync(file, 'utf8'));
     expect(raw2.form.fit).toBe('on');
     expect(raw2.form.cacheReuse).toBe('');
+  });
+});
+
+describe('resolveDataDir', () => {
+  it('空串/空白 -> 默认目录', () => {
+    expect(resolveDataDir('', 'C:\\app\\app_data')).toBe('C:\\app\\app_data');
+    expect(resolveDataDir('   ', 'C:\\app\\app_data')).toBe('C:\\app\\app_data');
+  });
+
+  it('相对路径 -> path.resolve', () => {
+    expect(resolveDataDir('mydata', 'C:\\app\\app_data')).toBe(path.resolve('mydata'));
+  });
+
+  it('绝对路径 -> 原样', () => {
+    const abs = path.join(os.tmpdir(), 'x');
+    expect(resolveDataDir(abs, 'C:\\app\\app_data')).toBe(abs);
+  });
+});
+
+describe('migrateLegacyData', () => {
+  it('旧目录不存在 -> 无操作', () => {
+    const old = path.join(tmpdir(), 'old');
+    const nw = tmpdir();
+    migrateLegacyData(old, nw);
+    expect(fs.existsSync(path.join(nw, 'config.json'))).toBe(false);
+  });
+
+  it('源存在目标不存在 -> 复制 config.json 与 profiles/records（源保留）', () => {
+    const old = tmpdir();
+    fs.writeFileSync(path.join(old, 'config.json'), '{"a":1}');
+    fs.mkdirSync(path.join(old, 'profiles'));
+    fs.writeFileSync(path.join(old, 'profiles', 'p.json'), '{}');
+    fs.mkdirSync(path.join(old, 'records'));
+    fs.writeFileSync(path.join(old, 'records', '2026-01-01.jsonl'), 'x\n');
+    const nw = tmpdir();
+    migrateLegacyData(old, nw);
+    expect(fs.readFileSync(path.join(nw, 'config.json'), 'utf8')).toBe('{"a":1}');
+    expect(fs.readFileSync(path.join(nw, 'profiles', 'p.json'), 'utf8')).toBe('{}');
+    expect(fs.existsSync(path.join(nw, 'records', '2026-01-01.jsonl'))).toBe(true);
+    expect(fs.existsSync(path.join(old, 'config.json'))).toBe(true); // 复制不移动
+  });
+
+  it('目标已存在 -> 跳过不覆盖（幂等）', () => {
+    const old = tmpdir();
+    fs.writeFileSync(path.join(old, 'config.json'), 'old');
+    const nw = tmpdir();
+    fs.writeFileSync(path.join(nw, 'config.json'), 'new');
+    migrateLegacyData(old, nw);
+    expect(fs.readFileSync(path.join(nw, 'config.json'), 'utf8')).toBe('new');
+  });
+
+  it('源单项缺失 -> 跳过该项，其余正常', () => {
+    const old = tmpdir();
+    fs.writeFileSync(path.join(old, 'config.json'), '{"a":1}');
+    const nw = tmpdir();
+    migrateLegacyData(old, nw);
+    expect(fs.existsSync(path.join(nw, 'config.json'))).toBe(true);
+    expect(fs.existsSync(path.join(nw, 'profiles'))).toBe(false);
+    expect(fs.existsSync(path.join(nw, 'records'))).toBe(false);
   });
 });

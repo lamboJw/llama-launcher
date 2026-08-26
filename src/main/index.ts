@@ -4,7 +4,7 @@ import path from 'node:path';
 import * as fs from 'node:fs';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { AppConfig, defaultConfigDir } from './config.js';
+import { AppConfig, defaultConfigDir, resolveDataDir, migrateLegacyData } from './config.js';
 import { scanModels } from './scan.js';
 import { scanHfCache, buildModelUnion } from './hf-cache.js';
 import { ProfilesStore } from './profiles.js';
@@ -23,11 +23,23 @@ import type {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
+const appRoot = (): string => (app.isPackaged ? path.dirname(app.getPath('exe')) : process.cwd());
+const llamaBaseDir = (): string => path.join(appRoot(), 'llama.cpp');
+
 // ---------- 状态 ----------
 let win: BrowserWindow | null = null;
-const config = new AppConfig();
-const profiles = new ProfilesStore(path.join(defaultConfigDir(), 'profiles'));
-const recordsDir = path.join(defaultConfigDir(), 'records');
+// 数据位置（规格：config.json 固定 appRoot/app_data；profiles/records 跟随 form.dataDir）
+const appDataDir = path.join(appRoot(), 'app_data');
+migrateLegacyData(defaultConfigDir(), appDataDir);
+const config = new AppConfig(appDataDir);
+const dataDir = (() => {
+  const d = resolveDataDir(config.getSettings().form.dataDir, appDataDir);
+  try { fs.mkdirSync(d, { recursive: true }); return d; }
+  catch { console.warn(`数据目录 ${d} 不可创建，回退默认 ${appDataDir}`); return appDataDir; }
+})();
+app.setPath('userData', path.join(dataDir, 'userData'));
+const profiles = new ProfilesStore(path.join(dataDir, 'profiles'));
+const recordsDir = path.join(dataDir, 'records');
 const pm = new ProcessManager();
 const stats = new StatsStore();
 const rounds = new RoundTracker();
@@ -63,9 +75,6 @@ let versionInfo: ParsedVersion | null = null;
 let versionMsg: string | null = null;
 let updateMsg: string | null = null;
 let updateProgress: UpdateProgress | null = null;
-
-const appRoot = (): string => (app.isPackaged ? path.dirname(app.getPath('exe')) : process.cwd());
-const llamaBaseDir = (): string => path.join(appRoot(), 'llama.cpp');
 
 const send = (channel: string, payload: unknown): void => {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
