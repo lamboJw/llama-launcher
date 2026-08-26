@@ -62,6 +62,7 @@ export interface FormValues {
   // App 级（非 server 参数）
   autoSwitch: boolean; hfCacheDir: string; recordRounds: boolean;
   scanDir: string; exeSelection: string; recordsMaxTotalBytes: number;
+  dataDir: string;   // 数据目录；'' = 默认 appRoot/app_data
 }
 
 export interface Settings { form: FormValues; lastModel?: string }

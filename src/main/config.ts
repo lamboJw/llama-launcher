@@ -42,6 +42,7 @@ export const DEFAULT_FORM: FormValues = {
   // App 级
   autoSwitch: false, hfCacheDir: DEFAULT_HF_CACHE, recordRounds: false,
   scanDir: '', exeSelection: '', recordsMaxTotalBytes: 1024 * 1024 * 1024,
+  dataDir: '',
 };
 
 export class JsonStore<T extends object> {

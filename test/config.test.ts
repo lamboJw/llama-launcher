@@ -48,6 +48,7 @@ describe('AppConfig', () => {
     expect(f.warmup).toBe(true);
     expect(f.hfCacheDir.length).toBeGreaterThan(0);
     expect(f.timeout).toBe('');
+    expect(f.dataDir).toBe('');
   });
 
   it('updateForm patches and persists across instances', () => {
