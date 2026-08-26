@@ -120,7 +120,13 @@ export function buildArgs(form: FormValues, model: ModelRef, internalPort: numbe
   str('ubatchSize', '--ubatch-size');
   str('cacheRam', '--cache-ram');
   str('flashAttn', '--flash-attn');
+  // kv-unified：'' = 不传（b10488 默认：slots 为 auto 时启用）；on/off 显式传
+  if (form.kvUnified === 'on') { argv.push('--kv-unified'); argToField['--kv-unified'] = 'kvUnified'; }
+  else if (form.kvUnified === 'off') { argv.push('--no-kv-unified'); argToField['--no-kv-unified'] = 'kvUnified'; }
   onFlag('swaFull', '--swa-full');
+  str('slotPromptSimilarity', '--slot-prompt-similarity');
+  str('slotSavePath', '--slot-save-path');
+  bool('slots', '--slots');
 
   // 采样组
   str('temperature', '--temperature');

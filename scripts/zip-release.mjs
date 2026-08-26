@@ -24,17 +24,17 @@ if (!(await stat(exe).then(() => true, () => false))) {
   process.exit(1);
 }
 
-// 产物目录重命名为 llama-launcher/（zip 根目录更直观）；被占用（例如正在运行）时
+// 产物目录重命名为 llama_launcher/（zip 根目录更直观）；被占用（例如正在运行）时
 // 不碰文件系统，改用 adm-zip 在 zip 内直接重根（addLocalFolder 的 zipRoot 参数）
 let zipRoot = folder.name;
-const pretty = path.join(releaseDir, 'llama-launcher');
+const pretty = path.join(releaseDir, 'llama_launcher');
 let renamed = false;
-if (folder.name !== 'llama-launcher') {
+if (folder.name !== 'llama_launcher') {
   try {
     await rm(pretty, { recursive: true, force: true });
     await (await import('node:fs/promises')).rename(src, pretty);
     src = pretty;
-    zipRoot = 'llama-launcher';
+    zipRoot = 'llama_launcher';
     renamed = true;
   } catch { /* 被占用 → 保持原名，稍后 adm-zip 重根 */ }
 }
@@ -54,9 +54,9 @@ if (renamed) {
 if (used === 'adm-zip') {
   const AdmZip = (await import('adm-zip')).default;
   const zip = new AdmZip();
-  zip.addLocalFolder(src, 'llama-launcher');
+  zip.addLocalFolder(src, 'llama_launcher');
   zip.writeZip(zipPath);
-  zipRoot = 'llama-launcher';
+  zipRoot = 'llama_launcher';
 }
 
 const z = await stat(zipPath);

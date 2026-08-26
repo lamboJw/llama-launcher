@@ -11,7 +11,8 @@ const BASE: FormValues = {
   nGpuLayers: '', threads: '', threadsBatch: '', splitMode: '',
   device: '', loadMode: '', fit: '', tensorSplit: '', cacheTypeK: '', cacheTypeV: '', nCpuMoE: '',
   ctxSize: '', parallel: '', batchSize: '', ubatchSize: '', ctxCheckpoints: '',
-  cacheRam: '', flashAttn: '', swaFull: false,
+  cacheRam: '', flashAttn: '', kvUnified: '', swaFull: false,
+  slotPromptSimilarity: '', slotSavePath: '', slots: true,
   temperature: '', topK: '', topP: '', minP: '',
   repeatPenalty: '', presencePenalty: '', frequencyPenalty: '',
   repeatLastN: '', seed: '', ignoreEos: false,
@@ -118,6 +119,26 @@ describe('buildArgs', () => {
     expect(hasPair(buildArgs({ ...BASE, fit: 'on' }, LOCAL, 59999).argv, '--fit', 'on')).toBe(true);
     expect(hasPair(buildArgs({ ...BASE, fit: 'off' }, LOCAL, 59999).argv, '--fit', 'off')).toBe(true);
     expect(buildArgs(BASE, LOCAL, 59999).argv).not.toContain('--fit');
+  });
+
+  it('kvUnified：on/off 显式传 --kv-unified / --no-kv-unified，空=不传（auto）', () => {
+    expect(buildArgs({ ...BASE, kvUnified: 'on' }, LOCAL, 59999).argv).toContain('--kv-unified');
+    expect(buildArgs({ ...BASE, kvUnified: 'off' }, LOCAL, 59999).argv).toContain('--no-kv-unified');
+    const argv = buildArgs(BASE, LOCAL, 59999).argv;
+    expect(argv).not.toContain('--kv-unified');
+    expect(argv).not.toContain('--no-kv-unified');
+  });
+
+  it('slot 参数：similarity/save-path 带值传（空=不传），slots 恒显式 --slots/--no-slots', () => {
+    const on = buildArgs({ ...BASE, slotPromptSimilarity: '0.5', slotSavePath: 'C:/slots', slots: false }, LOCAL, 59999).argv;
+    expect(hasPair(on, '--slot-prompt-similarity', '0.5')).toBe(true);
+    expect(hasPair(on, '--slot-save-path', 'C:/slots')).toBe(true);
+    expect(on).toContain('--no-slots');
+    const base = buildArgs(BASE, LOCAL, 59999).argv;
+    expect(base).not.toContain('--slot-prompt-similarity');
+    expect(base).not.toContain('--slot-save-path');
+    expect(base).toContain('--slots');
+    expect(base).not.toContain('--no-slots');
   });
 
   it('带值参数后绝不紧跟另一个 flag（--fit 不再吞 --cache-type-k）', () => {

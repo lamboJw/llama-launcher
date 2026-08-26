@@ -7,3 +7,4 @@ files:
   - package.json
 win:
   target: dir
+  icon: llama-launcher.ico

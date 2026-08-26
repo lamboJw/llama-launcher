@@ -22,7 +22,8 @@ export const DEFAULT_FORM: FormValues = {
   cacheTypeK: '', cacheTypeV: '', nCpuMoE: '',
   // 上下文组
   ctxSize: '', parallel: '', batchSize: '', ubatchSize: '', ctxCheckpoints: '',
-  cacheRam: '', flashAttn: '', swaFull: false,
+  cacheRam: '', flashAttn: '', kvUnified: '', swaFull: false,
+  slotPromptSimilarity: '', slotSavePath: '', slots: true,
   // 采样组
   temperature: '', topK: '', topP: '', minP: '',
   repeatPenalty: '', presencePenalty: '', frequencyPenalty: '',
@@ -99,7 +100,7 @@ export function migrateForm(f: FormValues): FormValues {
   // flash-attn 文档枚举为 on|off|auto（0/1 虽被强转接受，统一为文档值）
   if (any.flashAttn === '1') any.flashAttn = 'on';
   else if (any.flashAttn === '0') any.flashAttn = 'off';
-  for (const k of ['tensorSplit', 'specDraftTypeK', 'specDraftTypeV'] as const) {
+  for (const k of ['tensorSplit', 'specDraftTypeK', 'specDraftTypeV', 'kvUnified'] as const) {
     if (typeof any[k] !== 'string') any[k] = '';
   }
   return o;

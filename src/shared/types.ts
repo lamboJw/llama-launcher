@@ -42,7 +42,8 @@ export interface FormValues {
   // 上下文组
   ctxSize: string; parallel: string; batchSize: string; ubatchSize: string;
   ctxCheckpoints: string;
-  cacheRam: string; flashAttn: string; swaFull: boolean;
+  cacheRam: string; flashAttn: string; kvUnified: string; swaFull: boolean;
+  slotPromptSimilarity: string; slotSavePath: string; slots: boolean;
   // 采样组
   temperature: string; topK: string; topP: string; minP: string;
   repeatPenalty: string; presencePenalty: string; frequencyPenalty: string;

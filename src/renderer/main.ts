@@ -87,7 +87,11 @@ const GROUPS: { title: string; fields: FieldSpec[] }[] = [
     { id: 'cacheRam', label: 'KV 缓存内存 (MB, 默认8192)', type: 'text' },
     { id: 'ctxCheckpoints', label: '上下文检查点 (ctx-checkpoints)', type: 'text' },
     { id: 'flashAttn', label: 'Flash attention', type: 'select', options: [['', '默认(auto)'], ['on', 'on'], ['off', 'off'], ['auto', 'auto']] },
+    { id: 'kvUnified', label: 'KV 统一缓冲 (kv-unified)', type: 'select', options: [['', '默认(auto)'], ['on', 'on'], ['off', 'off']] },
     { id: 'swaFull', label: 'SWA 全注意力', type: 'checkbox' },
+    { id: 'slotPromptSimilarity', label: 'Slot 提示词相似度 (slot-prompt-similarity，0.0=禁用)', type: 'text' },
+    { id: 'slotSavePath', label: 'Slot KV 缓存保存路径 (slot-save-path)', type: 'text' },
+    { id: 'slots', label: 'Slot 监控端点 (slots)', type: 'checkbox' },
   ]},
   { title: '采样', fields: [
     { id: 'temperature', label: 'temperature', type: 'text' },
@@ -717,7 +721,8 @@ function subscribeEvents(): void {
   window.llama.on('stats:round', (p) => {
     const s = p as { latest: RoundStats | null; history: RoundStats[] };
     renderStats(s.latest, s.history);
-    if (activeTab === 'records' && form?.recordRounds) void loadRecords();
+    // 不再自动刷新轮次记录列表：运行中每完成一轮就重载会打断滚动/翻页，
+    // 用户可点「刷新」按钮或切 tab 时手动加载最新记录。
   });
   window.llama.on('update:progress', (p) => {
     const u = p as UpdateProgress;
