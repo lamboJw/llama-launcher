@@ -333,6 +333,8 @@ describe('runUpdate', () => {
   const exeName = (): string => (process.platform === 'win32' ? 'llama-server.exe' : 'llama-server');
   const withUrls = (port: number): ReleaseAsset[] =>
     ASSETS_10488.map((a) => ({ ...a, browser_download_url: `http://127.0.0.1:${port}/${a.name}` }));
+  // 本地服务器用例不走 tbap 代理
+  const NO_PROXY = { downloadPrefix: '' } as const;
 
   it('refuses without downloading when the disk precheck fails', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'upd-run-'));
@@ -380,6 +382,7 @@ describe('runUpdate', () => {
         assets: withUrls(port),
         selectedTag: 'b9000',
         minFreeBytes: 1024 * 1024,
+        ...NO_PROXY,
         verify: async (exePath) => { const s = await stat(exePath); if (s.size <= 0) throw new Error('empty exe'); },
         onProgress: (p) => phases.push(p.phase),
       });
@@ -429,6 +432,7 @@ describe('runUpdate', () => {
         selectedTag: null,
         minFreeBytes: 1024 * 1024,
         verify: async () => {},
+        ...NO_PROXY,
       });
       expect(res.ok).toBe(true);
       expect(res.valid).toBe(true);
@@ -436,6 +440,38 @@ describe('runUpdate', () => {
       await closeServer(server);
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('prepends the download prefix to asset URLs (tbap proxy)', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'upd-run-'));
+    try {
+      const { mainBuf, cudaBuf } = makeFixtures();
+      const hits: Record<string, number> = {};
+      const { port, server } = await serveFiles({
+        'llama-b10488-bin-win-cuda-13.3-x64.zip': mainBuf,
+        'cudart-llama-bin-win-cuda-13.3-x64.zip': cudaBuf,
+      }, hits);
+      // 模拟 tbap：本地服务器当前缀，资产 URL 保持 GitHub 原样
+      const ghAssets = ASSETS_10488.map((a) => ({
+        ...a,
+        browser_download_url: `https://github.com/ggml-org/llama.cpp/releases/download/b10488/${a.name}`,
+      }));
+      const res = await runUpdate({
+        baseDir: dir,
+        tag: 'b10488',
+        assets: ghAssets,
+        selectedTag: null,
+        minFreeBytes: 1024 * 1024,
+        verify: async () => {},
+        downloadPrefix: `http://127.0.0.1:${port}/`,
+      });
+      expect(res.ok).toBe(true);
+      expect(hits['llama-b10488-bin-win-cuda-13.3-x64.zip'] ?? 0).toBe(1);
+      expect(hits['cudart-llama-bin-win-cuda-13.3-x64.zip'] ?? 0).toBe(1);
+      await closeServer(server);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 
@@ -455,6 +491,7 @@ describe('runUpdate', () => {
         selectedTag: null,
         minFreeBytes: 1024 * 1024,
         verify: async () => { throw new Error('bad exe'); },
+        ...NO_PROXY,
       });
       expect(res.ok).toBe(true);
       expect(res.valid).toBe(false);

@@ -1,5 +1,5 @@
 // index.ts — Electron 主进程：窗口 / IPC / 启动编排（规格 §2/§3/§5/§9/§10）
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron';
 import path from 'node:path';
 import * as fs from 'node:fs';
 import { execFile } from 'node:child_process';
@@ -20,6 +20,9 @@ import type {
   FormValues, HfModel, InstalledVersion, LocalModel, ModelRef, ParsedVersion,
   RequestStats, RoundStats, UpdateProgress,
 } from '../shared/types.js';
+
+// 去掉顶部默认菜单栏（文件/编辑/查看…，对应用无用）
+Menu.setApplicationMenu(null);
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 

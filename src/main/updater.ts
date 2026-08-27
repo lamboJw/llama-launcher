@@ -12,6 +12,8 @@ import type { InstalledVersion, UpdateProgress } from '../shared/types.js';
 
 // b 系列构建全是 prerelease，/releases/latest 会跳过 → 用 releases 列表取最新 b 标签
 export const GITHUB_RELEASES_URL = 'https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30';
+// 国内网络加速：下载链接走 tbap 代理（302 跳转，重定向跟随已支持）；API 查询不变
+export const DOWNLOAD_PREFIX = 'https://github.tbap.top/';
 // GitHub API 无 User-Agent 直接 403（Node 原生 https 默认不带）
 const USER_AGENT = 'llama-launcher';
 export const MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024; // 2GB（zip + 解压峰值）
@@ -341,6 +343,7 @@ export interface RunUpdateOptions {
   onProgress?: (p: UpdateProgress) => void;
   minFreeBytes?: number;           // 默认 MIN_FREE_BYTES（2GB）
   verify?: (exePath: string) => Promise<void>;
+  downloadPrefix?: string;         // 默认 DOWNLOAD_PREFIX（tbap 代理）
 }
 
 export interface RunUpdateResult {
@@ -382,8 +385,9 @@ export async function runUpdate(opts: RunUpdateOptions): Promise<RunUpdateResult
     // 3. 下载主包（断点续传）
     const mainZip = path.join(opts.baseDir, main.asset.name);
     report('download-main', 0, 0, `下载主包 ${main.asset.name}${main.fellBack ? '（无 13.x 资产，回退最高 CUDA 版本）' : ''}`);
+    const prefix = opts.downloadPrefix ?? DOWNLOAD_PREFIX;
     await downloadFile({
-      url: main.asset.browser_download_url,
+      url: prefix + main.asset.browser_download_url,
       dest: mainZip,
       onProgress: (p) => report(
         'download-main', p.pct, p.mbps,
@@ -412,7 +416,7 @@ export async function runUpdate(opts: RunUpdateOptions): Promise<RunUpdateResult
         const cudaZip = path.join(opts.baseDir, cudaAsset.name);
         report('download-cuda', 0, 0, `下载 CUDA DLLs ${cudaAsset.name}`);
         await downloadFile({
-          url: cudaAsset.browser_download_url,
+          url: prefix + cudaAsset.browser_download_url,
           dest: cudaZip,
           onProgress: (p) => report(
             'download-cuda', p.pct, p.mbps,

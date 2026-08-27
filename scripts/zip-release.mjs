@@ -24,6 +24,16 @@ if (!(await stat(exe).then(() => true, () => false))) {
   process.exit(1);
 }
 
+// 只保留 zh-CN.pak（界面文字硬编码中文）。注意：Chromium 在 Windows 上要求
+// locales 目录至少存在一个 .pak，完全删除会导致渲染进程白屏，故不可整体删除。
+{
+  const localesDir = path.join(src, 'locales');
+  const keep = 'zh-CN.pak';
+  for (const f of await readdir(localesDir)) {
+    if (f !== keep) await rm(path.join(localesDir, f), { force: true });
+  }
+}
+
 // 产物目录重命名为 llama_launcher/（zip 根目录更直观）；被占用（例如正在运行）时
 // 不碰文件系统，改用 adm-zip 在 zip 内直接重根（addLocalFolder 的 zipRoot 参数）
 let zipRoot = folder.name;
