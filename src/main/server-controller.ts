@@ -6,6 +6,7 @@ import { buildArgs } from './args.js';
 import { probeFreePort, ProcessManager, type ExitInfo } from './process-manager.js';
 import type { SwitchController } from './proxy.js';
 import type { FormValues, ModelRef, ServerState, SwitchState } from '../shared/types.js';
+import { findSlotSaves, type SlotCache } from './slot-cache.js';
 
 /** 日志用参数引用：含空白/引号才加双引号（Windows cmd 风格转义） */
 function quoteArg(s: string): string {
@@ -44,6 +45,8 @@ export interface ControllerEvents {
   onLog?: (line: string) => void;
   onExit?: (info: ExitInfo) => void;
   onSwitch?: (s: SwitchState) => void;
+  /** slot 上下文保存/恢复阶段（null = 结束）；顶栏状态与按钮置灰用 */
+  onSlotPhase?: (phase: 'saving' | 'restoring' | null, model: string | null) => void;
 }
 
 export class ServerController implements SwitchController {
@@ -55,6 +58,10 @@ export class ServerController implements SwitchController {
   private lastReq: StartRequest | null = null;
   private _switching = false;
   private unionList: ModelRef[] = [];
+  private slotCache: SlotCache | null = null;
+
+  /** 注入 slot 上下文保存/恢复器（null = 功能禁用） */
+  setSlotCache(sc: SlotCache | null): void { this.slotCache = sc; }
 
   constructor(pm: ProcessManager, events: ControllerEvents = {}, healthTimeoutMs = 300000) {
     this.pm = pm;
@@ -118,6 +125,17 @@ export class ServerController implements SwitchController {
       });
       this.lastReq = req;
       await this.pm.waitForHealth(this.healthTimeoutMs);
+      // slot 上下文恢复（设计规格 §2）：仅当存在当前模型存档；期间状态仍为 starting（代理未起，无并发）
+      if (this.slotCache && findSlotSaves(this.slotCache.dir, req.model.name).size > 0) {
+        this.events.onSlotPhase?.('restoring', req.model.name);
+        try {
+          await this.slotCache.restoreAll(this.port, req.model.name);
+        } catch (e) {
+          this.events.onLog?.(`[launcher] 恢复 slot 上下文失败：${String(e)}（空上下文继续）`);
+        } finally {
+          this.events.onSlotPhase?.(null, null);
+        }
+      }
       this.setState({ status: 'running', port, model: req.model.name, exitCode: null });
     } catch (e) {
       await this.pm.stop().catch(() => {});
@@ -146,6 +164,17 @@ export class ServerController implements SwitchController {
 
   /** 停止（规格 §2.3）；切换期间停止 = 取消切换（杀掉新 server，回到 stopped） */
   async stop(): Promise<void> {
+    // slot 上下文保存（设计规格 §2）：仅 running/switching 时保存（starting=启动失败路径，不保存）
+    if (this.slotCache && this.pm.running && (this.state.status === 'running' || this.state.status === 'switching')) {
+      this.events.onSlotPhase?.('saving', this.state.model);
+      try {
+        await this.slotCache.saveAll(this.port, this.state.model ?? '');
+      } catch (e) {
+        this.events.onLog?.(`[launcher] 保存 slot 上下文失败：${String(e)}（继续停止）`);
+      } finally {
+        this.events.onSlotPhase?.(null, null);
+      }
+    }
     if (this.pm.running) await this.pm.stop();
     this.setState({ status: 'stopped', port: null, exitCode: null });
   }

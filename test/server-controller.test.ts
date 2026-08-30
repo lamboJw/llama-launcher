@@ -7,6 +7,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { ProcessManager, isPortFree, type ExitInfo } from '../src/main/process-manager.js';
 import { ServerController, type StartRequest } from '../src/main/server-controller.js';
+import { SlotCache } from '../src/main/slot-cache.js';
 import { DEFAULT_FORM } from '../src/main/config.js';
 import type { ModelRef, SwitchState } from '../shared/types.js';
 
@@ -190,5 +191,88 @@ describe('ServerController', () => {
   it('switchTo before start throws', async () => {
     const c3 = new ServerController(new ProcessManager(), {}, 3000);
     await expect(c3.switchTo(ref('any-model'))).rejects.toThrow(/not started/);
+  });
+});
+describe('ServerController + slot cache（设计规格 §2）', () => {
+  let dir: string;
+
+  const reqSlot = (model: string, extra: Record<string, string> = {}): StartRequest => ({
+    exe: process.execPath,
+    form: { ...DEFAULT_FORM, extraArgs: '--fake-flag' },
+    model: ref(model),
+    cudaDir: null,
+    extraEnv: (port: number) => ({ FAKE_PORT: String(port), FAKE_SLOT_DIR: dir, ...extra }),
+    extraArgvPrefix: [FAKE],
+  });
+
+  beforeAll(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-slot-cache-'));
+  });
+
+  afterAll(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('stop 前保存：标记文件在进程退出前生成；onSlotPhase saving→null', async () => {
+    const pm = new ProcessManager();
+    const phases: (string | null)[] = [];
+    const ctl = new ServerController(pm, { onSlotPhase: (p) => phases.push(p) }, 3000);
+    ctl.setSlotCache(new SlotCache({ dir, timeoutMs: 5000 }));
+    await ctl.start(reqSlot('save-model'));
+    expect(ctl.getState().status).toBe('running');
+    await ctl.stop();
+    expect(ctl.getState().status).toBe('stopped');
+    expect(pm.running).toBe(false);
+    // fake-server 在响应前同步写标记文件 → 文件存在即证明保存先于 kill
+    expect(fs.existsSync(path.join(dir, 'save-model_0.bin'))).toBe(true);
+    expect(fs.existsSync(path.join(dir, 'save-model_1.bin'))).toBe(true);
+    expect(phases).toEqual(['saving', null]);
+  });
+
+  it('start 后恢复：存在存档 → 触发 restore，状态 running', async () => {
+    const pm = new ProcessManager();
+    const phases: (string | null)[] = [];
+    const ctl = new ServerController(pm, { onSlotPhase: (p) => phases.push(p) }, 3000);
+    fs.writeFileSync(path.join(dir, 'restore-model_0.bin'), 'x');
+    fs.writeFileSync(path.join(dir, 'restore-model_1.bin'), 'x');
+    ctl.setSlotCache(new SlotCache({ dir, timeoutMs: 5000 }));
+    await ctl.start(reqSlot('restore-model'));
+    expect(ctl.getState().status).toBe('running');
+    expect(phases).toEqual(['restoring', null]);
+    await ctl.stop();
+  });
+
+  it('restore 失败（FAKE_SLOT_FAIL）→ 启动仍成功', async () => {
+    const pm = new ProcessManager();
+    const logs: string[] = [];
+    const ctl = new ServerController(pm, { onLog: (l) => logs.push(l) }, 3000);
+    fs.writeFileSync(path.join(dir, 'fail-restore-model_0.bin'), 'x');
+    ctl.setSlotCache(new SlotCache({ dir, timeoutMs: 5000 }));
+    await ctl.start(reqSlot('fail-restore-model', { FAKE_SLOT_FAIL: '1' }));
+    expect(ctl.getState().status).toBe('running');
+    expect(logs.some((l) => l.includes('恢复 slot 上下文失败'))).toBe(true);
+    await ctl.stop();
+  });
+
+  it('save 失败（FAKE_SLOT_FAIL）→ 停止仍完成', async () => {
+    const pm = new ProcessManager();
+    const logs: string[] = [];
+    const ctl = new ServerController(pm, { onLog: (l) => logs.push(l) }, 3000);
+    ctl.setSlotCache(new SlotCache({ dir, timeoutMs: 5000 }));
+    // FAKE_SLOT_FAIL 在 start 时注入（env 随进程固定）→ stop 时的 save 全部 500
+    await ctl.start(reqSlot('fail-save-model', { FAKE_SLOT_FAIL: '1' }));
+    await ctl.stop(); // saveAll 抛错（全部 500）→ 记日志继续停止
+    expect(ctl.getState().status).toBe('stopped');
+    expect(pm.running).toBe(false);
+    expect(logs.some((l) => l.includes('保存 slot 上下文失败'))).toBe(true);
+  });
+
+  it('slot cache 禁用（未 setSlotCache）→ fake-server 收不到 /slots 请求', async () => {
+    const pm = new ProcessManager();
+    const reqLog = path.join(dir, 'reqlog-ctl.txt');
+    const ctl = new ServerController(pm, {}, 3000);
+    await ctl.start(reqSlot('no-cache-model', { FAKE_REQ_LOG: reqLog }));
+    await ctl.stop();
+    expect(fs.readFileSync(reqLog, 'utf8')).not.toContain('/slots');
   });
 });
