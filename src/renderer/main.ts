@@ -1,6 +1,6 @@
 // renderer/main.ts — 主 UI（规格 §3：顶栏 / 左栏设置 / 右栏 tabs）；Task 16-17 填充统计/聊天/轮次记录
 import { ansiHtml } from './ansi.js';
-import type { FormValues, ModelRef, ServerState, Profile, RoundRecord, RoundStats, UpdateProgress, InstalledVersion } from '../shared/types.js';
+import type { FormValues, ModelRef, ServerState, Profile, RoundRecord, RoundStats, UpdateProgress, InstalledVersion, SlotPhaseEvent } from '../shared/types.js';
 
 interface BootState {
   appRoot: string;
@@ -90,7 +90,7 @@ const GROUPS: { title: string; fields: FieldSpec[] }[] = [
     { id: 'kvUnified', label: 'KV 统一缓冲 (kv-unified)', type: 'select', options: [['', '默认(auto)'], ['on', 'on'], ['off', 'off']] },
     { id: 'swaFull', label: 'SWA 全注意力', type: 'checkbox' },
     { id: 'slotPromptSimilarity', label: 'Slot 提示词相似度 (slot-prompt-similarity，0.0=禁用)', type: 'text' },
-    { id: 'slotSavePath', label: 'Slot KV 缓存保存路径 (slot-save-path)', type: 'text' },
+    { id: 'slotSavePath', label: 'Slot KV 缓存保存路径 (slot-save-path，slot 上下文自动保存/恢复需设置)', type: 'text' },
     { id: 'slots', label: 'Slot 监控端点 (slots)', type: 'checkbox' },
   ]},
   { title: '采样', fields: [
@@ -141,6 +141,9 @@ let union: ModelRef[] = [];
 let installed: InstalledVersion[] = [];
 let latestTag: string | null = null;
 let serverState: ServerState = { status: 'stopped', port: null, model: null, exitCode: null };
+let slotPhase: SlotPhaseEvent = { phase: null, model: null };
+let slotPhaseStart = 0;
+let slotPhaseTimer: ReturnType<typeof setInterval> | null = null;
 let activeTab = 'logs';
 let recordsDir = '';
 let recPage = 0;
@@ -403,17 +406,25 @@ function renderState(s: ServerState): void {
   serverState = s;
   const [text, color] = STATUS_UI[s.status];
   const badge = $<HTMLSpanElement>('status-badge');
-  badge.textContent = s.status === 'crashed' && s.exitCode !== null ? `${text} (exit ${s.exitCode})` : text;
-  badge.className = `badge ${color}`;
+  // slot 上下文阶段优先显示（设计规格 §4）：saving=yellow / restoring=cyan，Xs 为已用时秒数
+  const phaseText = slotPhase.phase === null ? null
+    : `${slotPhase.phase === 'saving' ? '保存 slot 上下文中…' : '恢复 slot 上下文中…'}（${Math.floor((Date.now() - slotPhaseStart) / 1000)}s）`;
+  if (phaseText !== null) {
+    badge.textContent = phaseText;
+    badge.className = `badge ${slotPhase.phase === 'saving' ? 'yellow' : 'cyan'}`;
+  } else {
+    badge.textContent = s.status === 'crashed' && s.exitCode !== null ? `${text} (exit ${s.exitCode})` : text;
+    badge.className = `badge ${color}`;
+  }
   const info = $<HTMLSpanElement>('port-info');
   const parts: string[] = [];
   if (s.model !== null) parts.push(s.model);
   if (s.port !== null && form) parts.push(`内部 :${s.port} → 可见 :${form.visiblePort}`);
   info.textContent = parts.join('  ');
-  const busy = s.status === 'starting' || s.status === 'switching';
+  const busy = s.status === 'starting' || s.status === 'switching' || slotPhase.phase !== null;
   btnStart.disabled = busy;
   btnStart.textContent = s.status === 'running' || s.status === 'switching' ? '重启（新模型）' : '启动';
-  btnStop.disabled = s.status === 'stopped' || s.status === 'starting';
+  btnStop.disabled = s.status === 'stopped' || s.status === 'starting' || slotPhase.phase !== null;
 }
 
 // ---------- 日志 ----------
@@ -714,6 +725,13 @@ function renderRecord(r: RoundRecord): HTMLElement {
 // ---------- 事件订阅 ----------
 function subscribeEvents(): void {
   window.llama.on('state:change', (p) => renderState(p as ServerState));
+  window.llama.on('slot:phase', (p) => {
+    slotPhase = p as SlotPhaseEvent;
+    if (slotPhase.phase !== null) slotPhaseStart = Date.now();
+    if (slotPhaseTimer !== null) { clearInterval(slotPhaseTimer); slotPhaseTimer = null; }
+    if (slotPhase.phase !== null) slotPhaseTimer = setInterval(() => renderState(serverState), 1000);
+    renderState(serverState);
+  });
   window.llama.on('log:lines', (p) => appendLog(p as string[]));
   window.llama.on('banner:change', (p) => renderBanner(p as { version: string | null; update: string | null }));
   window.llama.on('stats:request', (p) => {

@@ -100,6 +100,8 @@ export interface ServerState {
 
 export interface SwitchState { switching: boolean; from: string | null; to: string | null }
 
+export interface SlotPhaseEvent { phase: 'saving' | 'restoring' | null; model: string | null }
+
 export interface ParsedVersion { build: number | null; commit: string | null; raw: string }
 
 export interface UpdateProgress {
