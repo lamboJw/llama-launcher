@@ -10,6 +10,7 @@ import { scanHfCache, buildModelUnion } from './hf-cache.js';
 import { ProfilesStore } from './profiles.js';
 import { ProcessManager, isPortFree } from './process-manager.js';
 import { ServerController } from './server-controller.js';
+import { SlotCache } from './slot-cache.js';
 import { LauncherProxy } from './proxy.js';
 import { RecordsStore } from './records.js';
 import { StatsStore } from './stats.js';
@@ -67,8 +68,10 @@ const ctl = new ServerController(pm, {
   },
   onExit: (info) => send('exit:crash', info),
   onSwitch: (s) => send('switch:change', s),
+  onSlotPhase: (phase, model) => send('slot:phase', { phase, model }),
 });
 let proxy: LauncherProxy | null = null;
+let slotCache: SlotCache | null = null;
 let records: RecordsStore | null = null;
 let localModels: LocalModel[] = [];
 let hfModels: HfModel[] = [];
@@ -207,6 +210,25 @@ async function startServer(form: FormValues, model: ModelRef): Promise<void> {
   versionInfo = await probeVersion(exe);
   versionMsg = versionBanner(versionInfo);
   refreshBanner();
+  // slot 上下文自动保存/恢复（设计规格 §3）：slotSavePath 非空且目录可创建才启用
+  {
+    const dir = form.slotSavePath.trim();
+    if (dir !== '') {
+      try {
+        fs.mkdirSync(dir, { recursive: true });
+        slotCache = new SlotCache({ dir, apiKey: form.apiKey, onLog: pushLog });
+        ctl.setSlotCache(slotCache);
+      } catch (e) {
+        slotCache = null;
+        ctl.setSlotCache(null);
+        pushLog(`[launcher] slot-save-path 目录不可用（${String(e)}）：slot 上下文自动保存/恢复已禁用`);
+      }
+    } else {
+      slotCache = null;
+      ctl.setSlotCache(null);
+      pushLog('[launcher] 未设置 slot-save-path：slot 上下文自动保存/恢复已禁用');
+    }
+  }
   // 起 server（spawn → /health 就绪）
   await ctl.start({ exe, form, model, cudaDir, fallbackCudaDirs });
   // 起 / 重建反向代理（规格 §2.1）
@@ -394,6 +416,23 @@ function createWindow(): void {
   });
   win.loadFile(path.join(here, '..', 'renderer', 'index.html'));
   win.on('closed', () => { win = null; });
+
+  // 关窗拦截（设计规格 §3）：保存 slot 上下文期间不退出；保存完成/失败后才放行
+  let quitPhase: 'idle' | 'saving' | 'final' = 'idle';
+  win.on('close', (e) => {
+    if (quitPhase === 'final') return; // 放行（app.quit 触发的二次 close）
+    if (quitPhase === 'saving') { e.preventDefault(); return; } // 保存期间忽略重复点 X
+    const st = ctl.getState().status;
+    if (slotCache !== null && (st === 'running' || st === 'switching')) {
+      e.preventDefault();
+      quitPhase = 'saving';
+      void (async () => {
+        try { await stopServer(); } catch { /* 停止/保存失败不阻塞退出 */ }
+        quitPhase = 'final';
+        app.quit();
+      })();
+    }
+  });
 }
 
 app.whenReady().then(async () => {
