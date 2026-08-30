@@ -39,8 +39,9 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (req.url === '/slots') {
+    // 真实格式：顶层数组（b10636 实测）
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ default: 0, slots: slotIds.map((id) => ({ id })) }));
+    res.end(JSON.stringify(slotIds.map((id) => ({ id }))));
     return;
   }
   const slotAction = /^\/slots\/(\d+)\?action=(save|restore)$/.exec(req.url);

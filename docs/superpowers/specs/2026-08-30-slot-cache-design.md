@@ -71,7 +71,7 @@ export class SlotCache {
 ```
 
 - 请求格式：
-  - `GET http://127.0.0.1:<port>/slots` → 解析 JSON `slots[].id`
+  - `GET http://127.0.0.1:<port>/slots` → 响应为**顶层 JSON 数组** `[{"id":0,...},{"id":1,...}]`（b10636 实测），解析各元素 `id`（兼容 `{slots:[...]}` 对象格式）
   - `POST http://127.0.0.1:<port>/slots/<id>?action=save|restore`，
     `Content-Type: application/json`，body `{"filename": "<basename>"}`
   - `apiKey` 非空 → 带 `Authorization: Bearer <apiKey>`
@@ -181,7 +181,7 @@ if (dir !== '') {
 
 **fake-server.mjs 扩展**：
 
-- `GET /slots` → `{"default":0,"slots":[{"id":0},{"id":1}]}`（slot 数可用 env FAKE_SLOTS_N 配置，默认 2）
+- `GET /slots` → 顶层数组 `[{"id":0},{"id":1}]`（真实格式；slot 数可用 env FAKE_SLOTS_N 配置，默认 2）
 - `POST /slots/<id>?action=save` → 校验 JSON body filename；向 `FAKE_SLOT_DIR` 目录写同名标记文件；
   `FAKE_SLOT_FAIL=1` → 500
 - `POST /slots/<id>?action=restore` → 校验 body；`FAKE_SLOT_DIR` 中无对应标记文件 → 400；

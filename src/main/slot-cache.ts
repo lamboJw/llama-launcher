@@ -54,13 +54,20 @@ export class SlotCache {
     this.onLog = opts.onLog ?? (() => { /* 无日志回调 */ });
   }
 
-  /** GET /slots → slot id 列表；404 / 错误 → 抛错（调用方记日志并跳过） */
+  /** GET /slots → slot id 列表；404 / 错误 → 抛错（调用方记日志并跳过）
+   *  真实响应为顶层数组 [{id, ...}]（b10636 实测）；兼容 { slots: [...] } 对象格式 */
   async listSlots(port: number): Promise<number[]> {
     const res = await this.http(`http://127.0.0.1:${port}/slots`);
     if (!res.ok) throw new Error(`GET /slots 失败：HTTP ${res.status} ${await res.text()}`);
-    const data = (await res.json()) as { slots?: { id?: unknown }[] };
+    const data: unknown = await res.json();
+    const arr: unknown = Array.isArray(data) ? data : (data as { slots?: unknown })?.slots;
     const ids: number[] = [];
-    for (const s of data.slots ?? []) if (typeof s.id === 'number') ids.push(s.id);
+    if (Array.isArray(arr)) {
+      for (const s of arr) {
+        const id = (s as { id?: unknown })?.id;
+        if (typeof id === 'number') ids.push(id);
+      }
+    }
     return ids;
   }
 
