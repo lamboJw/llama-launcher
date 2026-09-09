@@ -58,7 +58,11 @@ export function scanHfCache(hfDir: string): HfModel[] {
     let snap: string | null = null;
     if (commit) {
       const p = path.join(dir, 'snapshots', commit);
-      if (fs.existsSync(p) && fs.statSync(p).isDirectory()) snap = p;
+      if (fs.existsSync(p) && fs.statSync(p).isDirectory()) {
+        // 检查该快照目录是否包含 .gguf 文件
+        const hasGguf = fs.readdirSync(p).some(f => /\.gguf$/i.test(f));
+        if (hasGguf) snap = p;
+      }
     }
     if (!snap) {
       // 回退：refs 指向的提交与 snapshots/ 目录名不匹配（refs 更新但快照未同步）→ 任选含 .gguf 的快照

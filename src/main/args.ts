@@ -158,6 +158,11 @@ export function buildArgs(form: FormValues, model: ModelRef, internalPort: numbe
   str('specDraftPMin', '--spec-draft-p-min');
   str('specDraftTypeK', '--spec-draft-type-k');
   str('specDraftTypeV', '--spec-draft-type-v');
+  if (specTypes.includes('ngram-mod')) {
+    str('specNgramModNMatch', '--spec-ngram-mod-n-match');
+    str('specNgramModNMin', '--spec-ngram-mod-n-min');
+    str('specNgramModNMax', '--spec-ngram-mod-n-max');
+  }
   onFlag('specDefault', '--spec-default');
 
   // 高级组

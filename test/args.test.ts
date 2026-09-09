@@ -19,7 +19,8 @@ const BASE: FormValues = {
   reasoningEffort: '', reasoningPreserve: false,
   specType: '', specDraftModel: '', specDraftHf: '',
   specDraftNMax: '', specDraftNMin: '', specDraftNgl: '',
-  specDraftThreads: '', specDraftPSplit: '', specDraftPMin: '', specDraftTypeK: '', specDraftTypeV: '', specDefault: false,
+  specDraftThreads: '', specDraftPSplit: '', specDraftPMin: '', specDraftTypeK: '', specDraftTypeV: '',
+  specNgramModNMatch: '', specNgramModNMin: '', specNgramModNMax: '', specDefault: false,
   verbosity: '', warmup: true, contextShift: false, cacheReuse: '',
   perf: false, logPromptsDir: '', mcpServersConfig: '',
   mtmdBatchMaxTokens: '', specDraftBackendSampling: false, extraArgs: '',
@@ -176,6 +177,37 @@ describe('buildArgs', () => {
     const { argv } = buildArgs({ ...BASE, specDraftTypeK: 'q8_0', specDraftTypeV: 'q4_0' }, LOCAL, 59999);
     expect(hasPair(argv, '--spec-draft-type-k', 'q8_0')).toBe(true);
     expect(hasPair(argv, '--spec-draft-type-v', 'q4_0')).toBe(true);
+  });
+
+  it('specType 含 ngram-mod → 传三个 ngram-mod 参数（MTP+N-gram 组合选项）', () => {
+    const { argv } = buildArgs({
+      ...BASE, specType: 'ngram-mod,draft-mtp',
+      specNgramModNMatch: '24', specNgramModNMin: '48', specNgramModNMax: '64',
+    }, LOCAL, 59999);
+    expect(hasPair(argv, '--spec-type', 'ngram-mod')).toBe(true);
+    expect(hasPair(argv, '--spec-type', 'draft-mtp')).toBe(true);
+    const i = argv.indexOf('--spec-type');
+    expect(argv.slice(i, i + 4)).toEqual(['--spec-type', 'ngram-mod', '--spec-type', 'draft-mtp']);
+    expect(hasPair(argv, '--spec-ngram-mod-n-match', '24')).toBe(true);
+    expect(hasPair(argv, '--spec-ngram-mod-n-min', '48')).toBe(true);
+    expect(hasPair(argv, '--spec-ngram-mod-n-max', '64')).toBe(true);
+  });
+
+  it('ngram-mod 参数字段为空 → 不传对应 flag', () => {
+    const { argv } = buildArgs({ ...BASE, specType: 'ngram-mod,draft-mtp' }, LOCAL, 59999);
+    expect(argv).not.toContain('--spec-ngram-mod-n-match');
+    expect(argv).not.toContain('--spec-ngram-mod-n-min');
+    expect(argv).not.toContain('--spec-ngram-mod-n-max');
+  });
+
+  it('specType 不含 ngram-mod → 即使字段有值也不传 ngram-mod 参数', () => {
+    const { argv } = buildArgs({
+      ...BASE, specType: 'draft-mtp',
+      specNgramModNMatch: '24', specNgramModNMin: '48', specNgramModNMax: '64',
+    }, LOCAL, 59999);
+    expect(argv).not.toContain('--spec-ngram-mod-n-match');
+    expect(argv).not.toContain('--spec-ngram-mod-n-min');
+    expect(argv).not.toContain('--spec-ngram-mod-n-max');
   });
 
   it('verbosity 支持 0-5（3=INFO 默认，4=TRACE，5=DEBUG）', () => {

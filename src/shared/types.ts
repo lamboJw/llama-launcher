@@ -54,6 +54,7 @@ export interface FormValues {
   specDraftNMax: string; specDraftNMin: string; specDraftNgl: string;
   specDraftThreads: string; specDraftPSplit: string; specDraftPMin: string;
   specDraftTypeK: string; specDraftTypeV: string;
+  specNgramModNMatch: string; specNgramModNMin: string; specNgramModNMax: string;
   specDefault: boolean;
   // 高级组
   verbosity: string; warmup: boolean; contextShift: boolean; cacheReuse: string;

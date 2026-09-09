@@ -34,6 +34,7 @@ export const DEFAULT_FORM: FormValues = {
   specDraftNMax: '', specDraftNMin: '', specDraftNgl: '',
   specDraftThreads: '', specDraftPSplit: '', specDraftPMin: '',
   specDraftTypeK: '', specDraftTypeV: '',
+  specNgramModNMatch: '24', specNgramModNMin: '48', specNgramModNMax: '64',
   specDefault: false,
   // 高级组
   verbosity: '', warmup: true, contextShift: false, cacheReuse: '',

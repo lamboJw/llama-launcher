@@ -109,7 +109,7 @@ const GROUPS: { title: string; fields: FieldSpec[] }[] = [
   ]},
   { title: '投机解码 (MTP)', fields: [
     { id: 'specDefault', label: '默认启用 (spec-default)', type: 'checkbox' },
-    { id: 'specType', label: '方式（spec-type）', type: 'select', options: [['', '无(none)'], ['draft-mtp', 'draft-mtp（MTP）'], ['draft-simple', 'draft-simple（草稿模型）'], ['draft-eagle3', 'draft-eagle3'], ['draft-dflash', 'draft-dflash'], ['draft-dspark', 'draft-dspark'], ['ngram-simple', 'ngram-simple'], ['ngram-map-k', 'ngram-map-k'], ['ngram-map-k4v', 'ngram-map-k4v'], ['ngram-mod', 'ngram-mod'], ['ngram-cache', 'ngram-cache']] },
+    { id: 'specType', label: '方式（spec-type）', type: 'select', options: [['', '无(none)'], ['draft-mtp', 'draft-mtp（MTP）'], ['draft-simple', 'draft-simple（草稿模型）'], ['draft-eagle3', 'draft-eagle3'], ['draft-dflash', 'draft-dflash'], ['draft-dspark', 'draft-dspark'], ['ngram-simple', 'ngram-simple'], ['ngram-map-k', 'ngram-map-k'], ['ngram-map-k4v', 'ngram-map-k4v'], ['ngram-mod', 'ngram-mod'], ['ngram-mod,draft-mtp', 'MTP+N-gram'], ['ngram-cache', 'ngram-cache']] },
     { id: 'specDraftModel', label: '草稿模型（本地）', type: 'text' },
     { id: 'specDraftHf', label: '草稿模型（HF）', type: 'text' },
     { id: 'specDraftNMax', label: 'n-max', type: 'text' },
@@ -120,6 +120,9 @@ const GROUPS: { title: string; fields: FieldSpec[] }[] = [
     { id: 'specDraftPMin', label: 'p-min', type: 'text' },
     { id: 'specDraftTypeK', label: 'draft K 缓存类型 (spec-draft-type-k)', type: 'text' },
     { id: 'specDraftTypeV', label: 'draft V 缓存类型 (spec-draft-type-v)', type: 'text' },
+    { id: 'specNgramModNMatch', label: 'ngram-mod n-match (spec-ngram-mod-n-match)', type: 'text' },
+    { id: 'specNgramModNMin', label: 'ngram-mod n-min (spec-ngram-mod-n-min)', type: 'text' },
+    { id: 'specNgramModNMax', label: 'ngram-mod n-max (spec-ngram-mod-n-max)', type: 'text' },
   ]},
   { title: '高级', fields: [
     { id: 'verbosity', label: '日志详细程度', type: 'select', options: [['', '默认(3=INFO)'], ['0', '0（generic output）'], ['1', '1（error）'], ['2', '2（warning）'], ['3', '3（INFO）'], ['4', '4（TRACE）'], ['5', '5（DEBUG）']] },
