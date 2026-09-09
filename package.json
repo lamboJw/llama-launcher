@@ -1,6 +1,6 @@
 {
   "name": "llama-launcher",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Windows desktop launcher for llama-server: proxy, stats, auto model switching",
   "author": "lamboJw",
   "main": "dist/main/index.js",
