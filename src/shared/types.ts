@@ -29,7 +29,7 @@ export interface ModelRef {
 export interface FormValues {
   // 模型组
   modelFile: string; alias: string; mmproj: string; mmprojUrl: string;
-  mmprojAuto: boolean; mmprojOffload: boolean;
+  mmprojAuto: boolean; mmprojOffload: boolean; mmprojDevice: string;
   imageMinTokens: string; imageMaxTokens: string;
   // 服务组（visiblePort/proxyHost 只作用于代理层）
   visiblePort: number; proxyHost: string; apiKey: string; timeout: string;
@@ -37,12 +37,12 @@ export interface FormValues {
   corsOrigins: string; corsMethods: string; corsHeaders: string; corsCredentials: boolean;
   // 硬件组
   nGpuLayers: string; threads: string; threadsBatch: string; splitMode: string;
-  device: string; loadMode: string; fit: string; tensorSplit: string;
-  cacheTypeK: string; cacheTypeV: string; nCpuMoE: string;
+  device: string; loadMode: string; lazyMode: string; fit: string; tensorSplit: string;
+  cacheTypeK: string; cacheTypeV: string; nCpuMoE: string; nCpuFfn: string;
   // 上下文组
   ctxSize: string; parallel: string; batchSize: string; ubatchSize: string;
   ctxCheckpoints: string;
-  cacheRam: string; flashAttn: string; kvUnified: string; swaFull: boolean;
+  cacheRam: string; flashAttn: string; kvUnified: string; kvUnifiedPerSlot: string; swaFull: boolean;
   slotPromptSimilarity: string; slotSavePath: string; slots: boolean;
   // 采样组
   temperature: string; topK: string; topP: string; minP: string;
@@ -58,7 +58,7 @@ export interface FormValues {
   specDefault: boolean;
   // 高级组
   verbosity: string; warmup: boolean; contextShift: boolean; cacheReuse: string;
-  perf: boolean; logPromptsDir: string; mcpServersConfig: string;
+  perf: boolean; logJsonl: boolean; logPromptsDir: string; mcpServersConfig: string;
   mtmdBatchMaxTokens: string; specDraftBackendSampling: boolean; extraArgs: string;
   // App 级（非 server 参数）
   autoSwitch: boolean; hfCacheDir: string; recordRounds: boolean;

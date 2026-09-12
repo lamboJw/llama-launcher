@@ -10,7 +10,7 @@ export const DEFAULT_HF_CACHE = path.join(os.homedir(), '.cache', 'huggingface',
 export const DEFAULT_FORM: FormValues = {
   // 模型组
   modelFile: '', alias: '', mmproj: '', mmprojUrl: '',
-  mmprojAuto: true, mmprojOffload: true,
+  mmprojAuto: true, mmprojOffload: true, mmprojDevice: '',
   imageMinTokens: '', imageMaxTokens: '',
   // 服务组
   visiblePort: 8080, proxyHost: '127.0.0.1', apiKey: '', timeout: '',
@@ -18,11 +18,11 @@ export const DEFAULT_FORM: FormValues = {
   corsOrigins: '', corsMethods: '', corsHeaders: '', corsCredentials: false,
   // 硬件组
   nGpuLayers: '', threads: '', threadsBatch: '', splitMode: '',
-  device: '', loadMode: '', fit: '', tensorSplit: '',
-  cacheTypeK: '', cacheTypeV: '', nCpuMoE: '',
+  device: '', loadMode: '', lazyMode: '', fit: '', tensorSplit: '',
+  cacheTypeK: '', cacheTypeV: '', nCpuMoE: '', nCpuFfn: '',
   // 上下文组
   ctxSize: '', parallel: '', batchSize: '', ubatchSize: '', ctxCheckpoints: '',
-  cacheRam: '', flashAttn: '', kvUnified: '', swaFull: false,
+  cacheRam: '', flashAttn: '', kvUnified: '', kvUnifiedPerSlot: '', swaFull: false,
   slotPromptSimilarity: '', slotSavePath: '', slots: true,
   // 采样组
   temperature: '', topK: '', topP: '', minP: '',
@@ -38,7 +38,7 @@ export const DEFAULT_FORM: FormValues = {
   specDefault: false,
   // 高级组
   verbosity: '', warmup: true, contextShift: false, cacheReuse: '',
-  perf: false, logPromptsDir: '', mcpServersConfig: '',
+  perf: false, logJsonl: false, logPromptsDir: '', mcpServersConfig: '',
   mtmdBatchMaxTokens: '', specDraftBackendSampling: false, extraArgs: '',
   // App 级
   autoSwitch: false, hfCacheDir: DEFAULT_HF_CACHE, recordRounds: false,
