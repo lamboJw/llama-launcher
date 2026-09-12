@@ -9,7 +9,7 @@
 ## 1. 背景与目标
 
 做一个 Windows 桌面应用，用于启动本机 llama-server。默认使用 App 目录内托管的
-llama.cpp 版本（`<appRoot>/llama.cpp/<tag>/llama-server.exe`，当前已下载 b10488 / build 10488 / commit 9d77fa172，
+llama.cpp 版本（`<appRoot>/llama.cpp/<tag>/llama-server.exe`，当前基线 b10919 / build 10919 / commit d3146f2b5，
 参数表单以其 --help 为基线）；也支持「自定义路径」指向外部二进制（如 F:\llama\Release\llama-server.exe，v9222）。
 
 功能目标：
@@ -157,7 +157,7 @@ llama.cpp 版本（`<appRoot>/llama.cpp/<tag>/llama-server.exe`，当前已下�
 
 ## 5. 参数表单
 
-按 llama-server **b10488**（build 10488，commit 9d77fa172，表单基线版本）实际 --help 参数分组。
+按 llama-server **b10919**（build 10919，commit d3146f2b5，表单基线版本）实际 --help 参数分组。
 **留空 = 不传该参数**（用 llama-server 默认值），App 不自行维护默认值，避免版本漂移。
 每个参数带 tooltip（--help 原文说明 + 默认值）。
 
@@ -168,13 +168,13 @@ llama.cpp 版本（`<appRoot>/llama.cpp/<tag>/llama-server.exe`，当前已下�
 
 | 分组 | 参数 |
 |---|---|
-| 模型 | 模型文件（扫描/手动）、--alias、--mmproj（多模态投影文件，**选中模型时自动探测同目录 `mmproj.*.gguf` 填入**，见 §4；可手动改/清空，带浏览按钮）、--mmproj-url（投影文件 URL，可选）、--mmproj-auto（默认开，配合 -hf 自动用投影）、--mmproj-offload（默认开，投影 GPU 卸载）、--image-min-tokens / --image-max-tokens（动态分辨率图像 token 上下限，留空=读模型） |
+| 模型 | 模型文件（扫描/手动）、--alias、--mmproj（多模态投影文件，**选中模型时自动探测同目录 `mmproj.*.gguf` 填入**，见 §4；可手动改/清空，带浏览按钮）、--mmproj-url（投影文件 URL，可选）、--mmproj-auto（默认开，配合 -hf 自动用投影）、--mmproj-offload（默认开，投影 GPU 卸载）、--mmproj-device（mmproj 指定设备，留空=跟随 --device，none=不放 GPU）、--image-min-tokens / --image-max-tokens（动态分辨率图像 token 上下限，留空=读模型） |
 | 服务 | 可见端口（默认 8080）、--host（**代理**监听地址，默认 127.0.0.1，填 0.0.0.0 允许局域网访问；server 自身永远绑 127.0.0.1，见 §5.3）、--api-key、--timeout（默认 600）、--jinja（默认开）、--ui WebUI 开关（默认开，代理透传后自带 WebUI 同端口可访问）、--sse-ping-interval（默认 30，SSE 心跳，-1 关）、CORS 四件套：--cors-origins / --cors-methods / --cors-headers / --cors-credentials（局域网多客户端场景用） |
-| 硬件 | --n-gpu-layers（默认 auto）、--threads、--threads-batch、--split-mode、--device、--load-mode（默认 auto；**替代已废弃的 --mmap/--mlock/--direct-io**，取值 auto/none/mmap/mlock/direct_io 等）、--fit（默认开）、--cache-type-k / --cache-type-v（默认 f16）、--n-cpu-moe |
-| 上下文 | --ctx-size（留空=模型默认）、--parallel、--batch-size（默认 2048）、--ubatch-size（默认 512）、--cache-ram（MiB）、--flash-attn（默认 auto）、--swa-full |
+| 硬件 | --n-gpu-layers（默认 auto）、--threads、--threads-batch、--split-mode、--device、--load-mode（默认 auto；**替代已废弃的 --mmap/--mlock/--direct-io**，取值 auto/none/mmap/mlock/direct_io 等）、--lazy-mode（on/auto/off，默认 auto，per-layer embeddings 等大张量按行 mmap 按需读盘）、--fit（默认开）、--cache-type-k / --cache-type-v（默认 f16）、--n-cpu-moe、--n-cpu-ffn（前 N 层 dense FFN 权重留 CPU） |
+| 上下文 | --ctx-size（留空=模型默认）、--parallel、--batch-size（默认 2048）、--ubatch-size（默认 512）、--cache-ram（MiB）、--flash-attn（默认 auto）、--kv-unified-per-slot（每并行 slot 的 context 上限，与 --ctx-size 同设时不生效）、--swa-full |
 | 采样 | --temperature（0.80）、--top-k（40）、--top-p（0.95）、--min-p（0.05）、--repeat-penalty（1.00）、--presence-penalty、--frequency-penalty、--repeat-last-n（64）、--seed（-1）、--ignore-eos、--reasoning-effort（default/minimal/low/medium/high/xhigh/max）、--reasoning-preserve（开关，推理模型保留完整思考链） |
 | 投机解码 (MTP) | --spec-type（多选：none / draft-simple / draft-eagle3 / **draft-mtp** / draft-dflash / draft-dspark / ngram-simple / ngram-map-k / ngram-map-k4v / ngram-mod / ngram-cache；MTP 选 draft-mtp）、--spec-draft-model（MTP/draft 模型文件，带浏览按钮）、--spec-draft-hf（HF 上的 draft 模型 `<user>/<model>[:quant]`）、--spec-draft-n-max（默认 3）、--spec-draft-n-min（默认 0）、--spec-draft-ngl（默认 auto）、--spec-draft-threads（默认同 --threads）、--spec-draft-p-split（默认 0.10）、--spec-draft-p-min（默认 0.00）、--spec-default（开关，启用默认投机解码配置） |
-| 高级 | --verbosity（默认 3）、--warmup（默认开）、--context-shift、--cache-reuse、--perf、--log-prompts-dir（llama.cpp 自带 prompt 落盘调试）、--mcp-servers-config（MCP 服务器定义 JSON 路径）、--mtmd-batch-max-tokens（默认 1024，多模态图像 token 批大小）、--spec-draft-backend-sampling（开关）、**附加参数自由文本框**（shell 风格分词后追加，覆盖一切未表单化的参数） |
+| 高级 | --verbosity（默认 3）、--warmup（默认开）、--context-shift、--cache-reuse、--perf、--log-jsonl（JSONL 日志，自动禁用彩色）、--log-prompts-dir（llama.cpp 自带 prompt 落盘调试）、--mcp-servers-config（MCP 服务器定义 JSON 路径）、--mtmd-batch-max-tokens（默认 1024，多模态图像 token 批大小）、--spec-draft-backend-sampling（开关）、**附加参数自由文本框**（shell 风格分词后追加，覆盖一切未表单化的参数） |
 
 ### 5.1 每模型参数档案
 - **选中即应用**：点选模型 → 若该模型有档案，自动填入表单（覆盖当前表单）；无档案保持默认/上次值。
@@ -299,8 +299,8 @@ llama-server → 用请求指定的模型重新启动**（单模型模式跑，�
    - App 启动时（及用户修改 exe 路径后）运行 `llama-server.exe --version` 解析版本。
      **两种格式都要支持**：旧版 `version: 9222 (9a532ae4b)`、新版
      `version: 0.1.2-dev (build 10488, commit 9d77fa172)`（正则提取 build/数字 + commit）。
-   - 顶栏/设置区显示当前版本；表单内置**基线版本 b10488**（参数集的设计依据）。
-   - 探测版本 ≠ 基线 → 非阻塞黄色横幅：「检测到 llama.cpp vXXXX，参数表单基于 b10488 设计，
+    - 顶栏/设置区显示当前版本；表单内置**基线版本 b10919**（参数集的设计依据）。
+    - 探测版本 ≠ 基线 → 非阻塞黄色横幅：「检测到 llama.cpp vXXXX，参数表单基于 b10919 设计，
      个别参数可能已改名」。
 2. **启动失败精准诊断（核心机制）**
    - server 启动后短时间内（< 10s）非零退出 → 扫描 stderr：
