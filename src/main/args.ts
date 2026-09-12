@@ -89,6 +89,7 @@ export function buildArgs(form: FormValues, model: ModelRef, internalPort: numbe
   str('mmprojUrl', '--mmproj-url');
   bool('mmprojAuto', '--mmproj-auto');
   bool('mmprojOffload', '--mmproj-offload');
+  str('mmprojDevice', '--mmproj-device');
   str('imageMinTokens', '--image-min-tokens');
   str('imageMaxTokens', '--image-max-tokens');
 
@@ -107,10 +108,12 @@ export function buildArgs(form: FormValues, model: ModelRef, internalPort: numbe
   str('tensorSplit', '--tensor-split');
   str('device', '--device');
   str('loadMode', '--load-mode');
+  str('lazyMode', '--lazy-mode');
   str('fit', '--fit');
   str('cacheTypeK', '--cache-type-k');
   str('cacheTypeV', '--cache-type-v');
   str('nCpuMoE', '--n-cpu-moe');
+  str('nCpuFfn', '--n-cpu-ffn');
 
   // 上下文组
   str('ctxSize', '--ctx-size');
@@ -123,6 +126,7 @@ export function buildArgs(form: FormValues, model: ModelRef, internalPort: numbe
   // kv-unified：'' = 不传（b10488 默认：slots 为 auto 时启用）；on/off 显式传
   if (form.kvUnified === 'on') { argv.push('--kv-unified'); argToField['--kv-unified'] = 'kvUnified'; }
   else if (form.kvUnified === 'off') { argv.push('--no-kv-unified'); argToField['--no-kv-unified'] = 'kvUnified'; }
+  str('kvUnifiedPerSlot', '--kv-unified-per-slot');
   onFlag('swaFull', '--swa-full');
   str('slotPromptSimilarity', '--slot-prompt-similarity');
   str('slotSavePath', '--slot-save-path');
@@ -171,6 +175,7 @@ export function buildArgs(form: FormValues, model: ModelRef, internalPort: numbe
   bool('contextShift', '--context-shift');
   str('cacheReuse', '--cache-reuse');
   bool('perf', '--perf');
+  bool('logJsonl', '--log-jsonl');
   str('logPromptsDir', '--log-prompts-dir');
   str('mcpServersConfig', '--mcp-servers-config');
   str('mtmdBatchMaxTokens', '--mtmd-batch-max-tokens');

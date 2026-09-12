@@ -4,14 +4,14 @@ import type { FormValues, ModelRef } from '../src/shared/types.js';
 
 const BASE: FormValues = {
   modelFile: '', alias: '', mmproj: '', mmprojUrl: '',
-  mmprojAuto: true, mmprojOffload: true, imageMinTokens: '', imageMaxTokens: '',
+  mmprojAuto: true, mmprojOffload: true, mmprojDevice: '', imageMinTokens: '', imageMaxTokens: '',
   visiblePort: 8080, proxyHost: '127.0.0.1', apiKey: '', timeout: '',
   jinja: true, ui: true, ssePingInterval: '',
   corsOrigins: '', corsMethods: '', corsHeaders: '', corsCredentials: false,
   nGpuLayers: '', threads: '', threadsBatch: '', splitMode: '',
-  device: '', loadMode: '', fit: '', tensorSplit: '', cacheTypeK: '', cacheTypeV: '', nCpuMoE: '',
+  device: '', loadMode: '', lazyMode: '', fit: '', tensorSplit: '', cacheTypeK: '', cacheTypeV: '', nCpuMoE: '', nCpuFfn: '',
   ctxSize: '', parallel: '', batchSize: '', ubatchSize: '', ctxCheckpoints: '',
-  cacheRam: '', flashAttn: '', kvUnified: '', swaFull: false,
+  cacheRam: '', flashAttn: '', kvUnified: '', kvUnifiedPerSlot: '', swaFull: false,
   slotPromptSimilarity: '', slotSavePath: '', slots: true,
   temperature: '', topK: '', topP: '', minP: '',
   repeatPenalty: '', presencePenalty: '', frequencyPenalty: '',
@@ -22,7 +22,7 @@ const BASE: FormValues = {
   specDraftThreads: '', specDraftPSplit: '', specDraftPMin: '', specDraftTypeK: '', specDraftTypeV: '',
   specNgramModNMatch: '', specNgramModNMin: '', specNgramModNMax: '', specDefault: false,
   verbosity: '', warmup: true, contextShift: false, cacheReuse: '',
-  perf: false, logPromptsDir: '', mcpServersConfig: '',
+  perf: false, logJsonl: false, logPromptsDir: '', mcpServersConfig: '',
   mtmdBatchMaxTokens: '', specDraftBackendSampling: false, extraArgs: '',
   autoSwitch: false, hfCacheDir: '', recordRounds: false,
   scanDir: '', exeSelection: '', recordsMaxTotalBytes: 1073741824,
@@ -77,6 +77,40 @@ describe('buildArgs', () => {
     for (const f of ['--ctx-size', '--n-gpu-layers', '--threads', '--alias', '--mmproj', '--temperature']) {
       expect(argv).not.toContain(f);
     }
+  });
+
+  it('lazyMode → --lazy-mode N（空 → 不传）', () => {
+    expect(hasPair(buildArgs({ ...BASE, lazyMode: 'on' }, LOCAL, 59999).argv, '--lazy-mode', 'on')).toBe(true);
+    expect(hasPair(buildArgs({ ...BASE, lazyMode: 'auto' }, LOCAL, 59999).argv, '--lazy-mode', 'auto')).toBe(true);
+    expect(hasPair(buildArgs({ ...BASE, lazyMode: 'off' }, LOCAL, 59999).argv, '--lazy-mode', 'off')).toBe(true);
+    expect(buildArgs(BASE, LOCAL, 59999).argv).not.toContain('--lazy-mode');
+  });
+
+  it('nCpuFfn → --n-cpu-ffn N（空 → 不传）', () => {
+    expect(hasPair(buildArgs({ ...BASE, nCpuFfn: '3' }, LOCAL, 59999).argv, '--n-cpu-ffn', '3')).toBe(true);
+    expect(buildArgs(BASE, LOCAL, 59999).argv).not.toContain('--n-cpu-ffn');
+  });
+
+  it('mmprojDevice → --mmproj-device（none/设备名透传，空 → 不传）', () => {
+    expect(hasPair(buildArgs({ ...BASE, mmprojDevice: 'none' }, LOCAL, 59999).argv, '--mmproj-device', 'none')).toBe(true);
+    expect(hasPair(buildArgs({ ...BASE, mmprojDevice: 'cuda1' }, LOCAL, 59999).argv, '--mmproj-device', 'cuda1')).toBe(true);
+    expect(buildArgs(BASE, LOCAL, 59999).argv).not.toContain('--mmproj-device');
+  });
+
+  it('kvUnifiedPerSlot → --kv-unified-per-slot N（空 → 不传）', () => {
+    expect(hasPair(buildArgs({ ...BASE, kvUnifiedPerSlot: '4096' }, LOCAL, 59999).argv, '--kv-unified-per-slot', '4096')).toBe(true);
+    expect(buildArgs(BASE, LOCAL, 59999).argv).not.toContain('--kv-unified-per-slot');
+  });
+
+  it('logJsonl → --log-jsonl / --no-log-jsonl 恒显式成对', () => {
+    const on = buildArgs({ ...BASE, logJsonl: true }, LOCAL, 59999);
+    expect(on.argv).toContain('--log-jsonl');
+    expect(on.argv).not.toContain('--no-log-jsonl');
+    const off = buildArgs(BASE, LOCAL, 59999);
+    expect(off.argv).toContain('--no-log-jsonl');
+    expect(off.argv).not.toContain('--log-jsonl');
+    expect(off.argToField['--log-jsonl']).toBe('logJsonl');
+    expect(off.argToField['--no-log-jsonl']).toBe('logJsonl');
   });
 
   it('proxy-only fields never reach the server', () => {
