@@ -3,6 +3,7 @@ import { parseVersion, versionBanner, diagnoseStartupFailure, BASELINE_BUILD } f
 
 const OLD_OUT = 'version: 9222 (9a532ae4b)\nbuilt with Clang 19.1.5 for Windows x86_64\n';
 const NEW_OUT = 'version: 0.1.2-dev (build 10488, commit 9d77fa172)\nbuilt with Clang 20.1.8 for Windows x86_64\n';
+const NEW10919_OUT = 'version: 0.4.0 (build 10919, commit d3146f2b5)\nbuilt with Clang 20.1.8 for Windows x86_64\n';
 
 describe('parseVersion', () => {
   it('parses old format (v9222 real output)', () => {
@@ -18,6 +19,12 @@ describe('parseVersion', () => {
     expect(v.commit).toBe('9d77fa172');
   });
 
+  it('parses b10919 output', () => {
+    const v = parseVersion(NEW10919_OUT);
+    expect(v.build).toBe(10919);
+    expect(v.commit).toBe('d3146f2b5');
+  });
+
   it('unparseable -> nulls, raw kept', () => {
     const v = parseVersion('llama-server: unrecognized option\n');
     expect(v.build).toBeNull();
@@ -28,14 +35,14 @@ describe('parseVersion', () => {
 
 describe('versionBanner', () => {
   it('baseline -> no banner', () => {
-    expect(versionBanner(parseVersion(NEW_OUT))).toBeNull();
+    expect(versionBanner(parseVersion(NEW10919_OUT))).toBeNull();
   });
 
   it('non-baseline -> banner with version and baseline', () => {
     const b = versionBanner(parseVersion(OLD_OUT));
     expect(b).not.toBeNull();
     expect(b!).toContain('9222');
-    expect(b!).toContain('b10488');
+    expect(b!).toContain('b10919');
   });
 
   it('unparseable -> no banner', () => {
@@ -86,5 +93,5 @@ describe('diagnoseStartupFailure', () => {
 });
 
 it('baseline constant', () => {
-  expect(BASELINE_BUILD).toBe(10488);
+  expect(BASELINE_BUILD).toBe(10919);
 });

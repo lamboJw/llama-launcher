@@ -2,7 +2,7 @@
 // 被动兼容 + 精准诊断：不做自动改名，只告诉用户哪个参数坏了、在哪改
 import type { ParsedVersion } from '../shared/types.js';
 
-export const BASELINE_BUILD = 10488;
+export const BASELINE_BUILD = 10919;
 
 // 旧版（v9222 实测）：version: 9222 (9a532ae4b)
 const OLD_RE = /version:\s*(\d+)\s*\(([0-9a-f]{7,40})\)/i;
