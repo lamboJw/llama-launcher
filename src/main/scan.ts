@@ -44,6 +44,13 @@ export function scanModels(dir: string): LocalModel[] {
   return out;
 }
 
+/** 同目录非递归扫 mmproj.*.gguf（规格 §4）：恰好 1 个 → 全路径；0 或 2+ → null */
+export function findMmprojInDir(dir: string): string | null {
+  if (!dir || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return null;
+  const hits = fs.readdirSync(dir).filter(f => MMPROJ.test(f));
+  return hits.length === 1 ? path.join(dir, hits[0]) : null;
+}
+
 function walk(dir: string, out: string[]): void {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, e.name);

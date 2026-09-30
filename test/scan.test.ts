@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { scanModels } from '../src/main/scan.js';
+import { scanModels, findMmprojInDir } from '../src/main/scan.js';
 
 let root: string;
 
@@ -58,5 +58,22 @@ describe('scanModels', () => {
 
   it('missing dir -> empty list', () => {
     expect(scanModels(path.join(root, 'nope'))).toEqual([]);
+  });
+});
+describe('findMmprojInDir', () => {
+  it('exactly one mmproj in dir -> full path', () => {
+    expect(findMmprojInDir(path.join(root, 'MyModel'))).toBe(path.join(root, 'MyModel', 'mmproj-F16.gguf'));
+  });
+
+  it('multiple mmproj in dir -> null', () => {
+    expect(findMmprojInDir(path.join(root, 'Multi'))).toBeNull();
+  });
+
+  it('no mmproj in dir -> null', () => {
+    expect(findMmprojInDir(root)).toBeNull();
+  });
+
+  it('missing dir -> null', () => {
+    expect(findMmprojInDir(path.join(root, 'nope'))).toBeNull();
   });
 });

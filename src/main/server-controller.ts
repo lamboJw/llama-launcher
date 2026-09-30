@@ -3,6 +3,8 @@
 import path from 'node:path';
 import * as fs from 'node:fs';
 import { buildArgs } from './args.js';
+import { filterArgv, getSupportedFlags } from './capabilities.js';
+import { findMmprojInDir } from './scan.js';
 import { probeFreePort, ProcessManager, type ExitInfo } from './process-manager.js';
 import type { SwitchController } from './proxy.js';
 import type { FormValues, ModelRef, ServerState, SwitchState } from '../shared/types.js';
@@ -24,6 +26,26 @@ function checkCudaDir(dir: string): string | null {
     return `CUDA 运行时目录中未找到 cudart64_*.dll：${dir}（CUDA DLLs 未下载完整，请重新「立即更新」）`;
   }
   return null;
+}
+
+/** fork 兼容（规格 §4）：目标 exe 不支持 --mmproj-auto，且勾选自动探测、mmproj 未填、
+ * 主模型同目录恰好 1 个 mmproj.*.gguf → 填入 form.mmproj，作为显式 --mmproj 传入。
+ * supported = null（探测失败，能力未知）→ 不干预，保持原样 */
+export function applyMmprojFallback(
+  form: FormValues,
+  model: ModelRef,
+  supported: Set<string> | null,
+): { form: FormValues; note: string | null } {
+  if (supported !== null && !supported.has('--mmproj-auto') && form.mmprojAuto && form.mmproj.trim() === '') {
+    const modelPath = model.source === 'local' ? model.local?.path : model.hf?.localPath;
+    if (modelPath && modelPath.trim() !== '') {
+      const hit = findMmprojInDir(path.dirname(modelPath));
+      if (hit) {
+        return { form: { ...form, mmproj: hit }, note: `[launcher] 目标 exe 不支持 --mmproj-auto，回退为主模型同目录自动探测 mmproj：${hit}` };
+      }
+    }
+  }
+  return { form, note: null };
 }
 
 export interface StartRequest {
@@ -102,7 +124,16 @@ export class ServerController implements SwitchController {
     try {
       const port = await probeFreePort();
       this.port = port;
-      const built = buildArgs(req.form, req.model, port);
+      const supported = await getSupportedFlags(req.exe);
+      // fork 兼容（规格 §4）：exe 不支持 --mmproj-auto 时，回退启动器侧同目录探测 mmproj
+      const fb = applyMmprojFallback(req.form, req.model, supported);
+      if (fb.note) this.events.onLog?.(fb.note);
+      const built = buildArgs(fb.form, req.model, port);
+      // fork 兼容（capabilities.ts）：按 exe --help 过滤不支持的参数；探测失败不过滤
+      const filtered = filterArgv(built.argv, supported);
+      if (filtered.removed.length > 0) {
+        this.events.onLog?.(`[launcher] 目标 exe 不支持以下参数，已按 --help 自动移除：${filtered.removed.join(' ')}`);
+      }
       const env: Record<string, string> = { ...built.env, ...(req.extraEnv ? req.extraEnv(port) : {}) };
       if (req.cudaDir) {
         const cudaErr = checkCudaDir(req.cudaDir);
@@ -113,10 +144,10 @@ export class ServerController implements SwitchController {
         env.PATH = `${req.fallbackCudaDirs.join(path.delimiter)}${path.delimiter}${process.env.PATH ?? ''}`;
         this.events.onLog?.(`[launcher] 自定义 exe：自动注入托管 CUDA 目录 ${req.fallbackCudaDirs.join(', ')} 到 PATH（尽力而为）`);
       }
-      this.events.onLog?.(`[launcher] 命令行：${[req.exe, ...(req.extraArgvPrefix ?? []), ...built.argv].map(quoteArg).join(' ')}`);
+      this.events.onLog?.(`[launcher] 命令行：${[req.exe, ...(req.extraArgvPrefix ?? []), ...filtered.argv].map(quoteArg).join(' ')}`);
       await this.pm.start({
         exe: req.exe,
-        argv: [...(req.extraArgvPrefix ?? []), ...built.argv],
+        argv: [...(req.extraArgvPrefix ?? []), ...filtered.argv],
         env,
         cwd: req.cudaDir ?? undefined,
         port,

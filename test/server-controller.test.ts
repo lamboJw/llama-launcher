@@ -2,14 +2,16 @@
 // 测试替身：fake-server.mjs（真实 spawn，node 二进制充当 llama-server）
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { clearFlagCache } from '../src/main/capabilities.js';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { ProcessManager, isPortFree, type ExitInfo } from '../src/main/process-manager.js';
-import { ServerController, type StartRequest } from '../src/main/server-controller.js';
+import { ServerController, applyMmprojFallback, type StartRequest } from '../src/main/server-controller.js';
 import { SlotCache } from '../src/main/slot-cache.js';
 import { DEFAULT_FORM } from '../src/main/config.js';
-import type { ModelRef, SwitchState } from '../shared/types.js';
+import type { FormValues, ModelRef, SwitchState } from '../shared/types.js';
 
 const FAKE = fileURLToPath(new URL('./fake-server.mjs', import.meta.url));
 
@@ -274,5 +276,154 @@ describe('ServerController + slot cache（设计规格 §2）', () => {
     await ctl.start(reqSlot('no-cache-model', { FAKE_REQ_LOG: reqLog }));
     await ctl.stop();
     expect(fs.readFileSync(reqLog, 'utf8')).not.toContain('/slots');
+  });
+});
+
+describe('applyMmprojFallback (fork 兼容，规格 §4)', () => {
+  let dir: string;
+  const noAuto = new Set(['--port', '--model', '--mmproj']);
+  const withAuto = new Set(['--port', '--model', '--mmproj', '--mmproj-auto']);
+
+  beforeAll(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mmproj-fallback-'));
+  });
+  afterAll(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+  const local = (d: string, file: string): ModelRef => {
+    const name = path.basename(file, '.gguf');
+    return { name, source: 'local', local: { name, path: path.join(d, file), size: 1, mtime: 0, mmproj: null, mmprojCandidates: [] } };
+  };
+  const hf = (d: string, withLocal: boolean): ModelRef => ({
+    name: 'hf-model',
+    source: 'hf',
+    hf: { repo: 'org/repo', path: 'q4_k_m', size: 1, mtime: 0, mmproj: null, mmprojCandidates: [], ...(withLocal ? { localPath: path.join(d, 'model.gguf') } : {}) },
+  });
+  const form = (over: Partial<FormValues> = {}): FormValues => ({ ...DEFAULT_FORM, mmproj: '', mmprojAuto: true, ...over });
+
+  it('exe 不支持 --mmproj-auto + 勾选 + 未填 + 同目录恰好 1 个 → 填入', () => {
+    const d = path.join(dir, 'one'); fs.mkdirSync(d);
+    fs.writeFileSync(path.join(d, 'model.gguf'), '');
+    fs.writeFileSync(path.join(d, 'mmproj-model.gguf'), '');
+    const { form: f, note } = applyMmprojFallback(form(), local(d, 'model.gguf'), noAuto);
+    expect(f.mmproj).toBe(path.join(d, 'mmproj-model.gguf'));
+    expect(note).toContain('--mmproj-auto');
+  });
+
+  it('exe 支持 --mmproj-auto → 不动', () => {
+    const d = path.join(dir, 'one');
+    const { form: f, note } = applyMmprojFallback(form(), local(d, 'model.gguf'), withAuto);
+    expect(f.mmproj).toBe('');
+    expect(note).toBeNull();
+  });
+
+  it('探测失败（supported = null）→ 不动', () => {
+    const d = path.join(dir, 'one');
+    const { form: f, note } = applyMmprojFallback(form(), local(d, 'model.gguf'), null);
+    expect(f.mmproj).toBe('');
+    expect(note).toBeNull();
+  });
+
+  it('未勾选自动探测 → 不动', () => {
+    const d = path.join(dir, 'one');
+    const { form: f } = applyMmprojFallback(form({ mmprojAuto: false }), local(d, 'model.gguf'), noAuto);
+    expect(f.mmproj).toBe('');
+  });
+
+  it('mmproj 已手动填写 → 不动', () => {
+    const d = path.join(dir, 'one');
+    const { form: f } = applyMmprojFallback(form({ mmproj: 'manual.gguf' }), local(d, 'model.gguf'), noAuto);
+    expect(f.mmproj).toBe('manual.gguf');
+  });
+
+  it('同目录 0 个或 2+ 个 → 不动', () => {
+    const d0 = path.join(dir, 'zero'); fs.mkdirSync(d0);
+    fs.writeFileSync(path.join(d0, 'model.gguf'), '');
+    const d2 = path.join(dir, 'two'); fs.mkdirSync(d2);
+    fs.writeFileSync(path.join(d2, 'model.gguf'), '');
+    fs.writeFileSync(path.join(d2, 'mmproj-a.gguf'), '');
+    fs.writeFileSync(path.join(d2, 'mmproj-b.gguf'), '');
+    expect(applyMmprojFallback(form(), local(d0, 'model.gguf'), noAuto).form.mmproj).toBe('');
+    expect(applyMmprojFallback(form(), local(d2, 'model.gguf'), noAuto).form.mmproj).toBe('');
+  });
+
+  it('HF 模型有 localPath → 扫其同目录', () => {
+    const d = path.join(dir, 'hfdir'); fs.mkdirSync(d);
+    fs.writeFileSync(path.join(d, 'model.gguf'), '');
+    fs.writeFileSync(path.join(d, 'mmproj-model.gguf'), '');
+    const { form: f } = applyMmprojFallback(form(), hf(d, true), noAuto);
+    expect(f.mmproj).toBe(path.join(d, 'mmproj-model.gguf'));
+  });
+
+  it('HF 模型无 localPath → 不动', () => {
+    const { form: f } = applyMmprojFallback(form(), hf(dir, false), noAuto);
+    expect(f.mmproj).toBe('');
+  });
+});
+
+const GCC = 'F:/mingw64/bin/gcc.exe';
+
+// 假 kvmem fork C 源码：--help 只列 --model/--mmproj/--port（无 --mmproj-auto）；
+// 其余参数经 node 转给 fake-server.mjs（路径由 env 注入；受控测试路径无空白，不加引号）
+const FAKE_C_SOURCE = `#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+int main(int argc, char** argv) {
+  if (argc > 1 && strcmp(argv[1], "--help") == 0) {
+    printf("fake-kvmem-server --model --mmproj --port");
+    return 0;
+  }
+  const char* node = getenv("NODE_EXE");
+  const char* fake = getenv("FAKE_SERVER");
+  if (!node || !fake) { fprintf(stderr, "missing NODE_EXE or FAKE_SERVER"); return 2; }
+  char cmd[8192];
+  snprintf(cmd, sizeof(cmd), "%s %s", node, fake);
+  for (int i = 1; i < argc; i++) { strcat(cmd, " "); strcat(cmd, argv[i]); }
+  return system(cmd);
+}`;
+
+describe.skipIf(process.platform !== 'win32' || !fs.existsSync(GCC))('mmproj 回退端到端（编译 .exe 假 fork，规格 §4）', () => {
+  let root: string;
+  let exe: string;
+
+  beforeAll(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'mmproj-e2e-'));
+    fs.writeFileSync(path.join(root, 'fake-kvmem.c'), FAKE_C_SOURCE);
+    exe = path.join(root, 'fake-kvmem.exe');
+    const r = spawnSync(GCC, ['-O2', '-o', exe, path.join(root, 'fake-kvmem.c')], { encoding: 'utf8' });
+    if (r.status !== 0) throw new Error('gcc 编译失败：' + (r.stderr || r.stdout));
+  });
+
+  afterAll(() => {
+    clearFlagCache();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('勾选自动探测 + 未填 mmproj → 同目录唯一 mmproj 作为 --mmproj 传入，--mmproj-auto 被过滤', async () => {
+    const d = path.join(root, 'models');
+    fs.mkdirSync(d);
+    const model = path.join(d, 'model.gguf');
+    const mmproj = path.join(d, 'mmproj-model.gguf');
+    fs.writeFileSync(model, '');
+    fs.writeFileSync(mmproj, '');
+    clearFlagCache();
+    const logs: string[] = [];
+    const c2 = new ServerController(new ProcessManager(), { onLog: (l) => logs.push(l) }, 3000);
+    const modelRef: ModelRef = {
+      name: 'model',
+      source: 'local',
+      local: { name: 'model', path: model, size: 1, mtime: Date.now(), mmproj: null, mmprojCandidates: [] },
+    };
+    await c2.start({
+      exe,
+      form: { ...DEFAULT_FORM, mmproj: '', mmprojAuto: true },
+      model: modelRef,
+      cudaDir: null,
+      extraEnv: (port) => ({ NODE_EXE: process.execPath, FAKE_SERVER: FAKE, FAKE_PORT: String(port) }),
+    });
+    const cmdLine = logs.find((l) => l.startsWith('[launcher] 命令行：'));
+    expect(cmdLine).toContain('--mmproj ' + mmproj);
+    expect(cmdLine).not.toContain('--mmproj-auto');
+    expect(logs.some((l) => l.includes('目标 exe 不支持 --mmproj-auto'))).toBe(true);
+    await c2.stop();
   });
 });
