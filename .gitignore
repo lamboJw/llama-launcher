@@ -17,3 +17,6 @@ staging/
 
 # runtime data
 app_data/
+
+# design specs / plans (local only, not version controlled)
+docs/
