@@ -63,7 +63,7 @@ class SseParser {
   }
 }
 
-/** 响应 timings（b10488：SSE 尾部 chunk / 非流式 JSON 都带）→ prefill/decode/缓存命中率直读 */
+/** 响应 timings（SSE 尾部 chunk / 非流式 JSON 都带）→ prefill/decode/缓存命中率直读 */
 export function extractTimings(t: unknown): { prefillMs: number | null; prefillTps: number | null; decodeTps: number | null; cacheHitRate: number | null } {
   const none = { prefillMs: null as number | null, prefillTps: null as number | null, decodeTps: null as number | null, cacheHitRate: null as number | null };
   if (t === null || typeof t !== 'object') return none;
@@ -71,17 +71,22 @@ export function extractTimings(t: unknown): { prefillMs: number | null; prefillT
   const prefillMs = typeof ti.prompt_ms === 'number' ? ti.prompt_ms : null;
   const prefillTps = typeof ti.prompt_per_second === 'number' ? ti.prompt_per_second : null;
   const decodeTps = typeof ti.predicted_per_second === 'number' ? ti.predicted_per_second : null;
+  // v0.17.0 timings 语义：prompt_n = 实际处理数（miss）、cache_n = 命中数 → 命中率 = cache_n / (cache_n + prompt_n)
   let cacheHitRate: number | null = null;
-  if (typeof ti.cache_n === 'number' && typeof ti.prompt_n === 'number' && ti.prompt_n > 0) cacheHitRate = ti.cache_n / ti.prompt_n;
+  if (typeof ti.cache_n === 'number' && typeof ti.prompt_n === 'number') {
+    const total = ti.cache_n + ti.prompt_n;
+    if (total > 0) cacheHitRate = ti.cache_n / total;
+  }
   return { prefillMs, prefillTps, decodeTps, cacheHitRate };
 }
 
-/** usage.prompt_tokens_details.cached_tokens / prompt_tokens → 命中率（不可计算返回 null） */
+/** usage → 命中率：标准字段 prompt_tokens_details.cached_tokens 优先；fork（kvmem）刻意省掉该
+ *  字段（避免 OpenCode 双计），改出 prompt_cache_hit_tokens；不可计算返回 null */
 export function computeCacheHitRate(usage: unknown): number | null {
   if (usage === null || typeof usage !== 'object') return null;
-  const u = usage as { prompt_tokens?: unknown; prompt_tokens_details?: { cached_tokens?: unknown } };
+  const u = usage as { prompt_tokens?: unknown; prompt_tokens_details?: { cached_tokens?: unknown }; prompt_cache_hit_tokens?: unknown };
   if (typeof u.prompt_tokens !== 'number' || u.prompt_tokens <= 0) return null;
-  const ct = u.prompt_tokens_details?.cached_tokens;
+  const ct = u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens;
   if (typeof ct !== 'number') return null;
   return ct / u.prompt_tokens;
 }

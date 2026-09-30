@@ -418,7 +418,73 @@ describe('LauncherProxy', () => {
     expect(s2[0].prefillMs).toBe(5000);
     expect(s2[0].prefillTps).toBe(20);
     expect(s2[0].decodeTps).toBe(14.3);
-    expect(s2[0].cacheHitRate).toBeCloseTo(0.25); // timings.cache_n / prompt_n（流式无 usage）
+    expect(s2[0].cacheHitRate).toBeCloseTo(0.2); // timings 回退：cache_n / (cache_n + prompt_n)（v0.17.0 语义：prompt_n=未命中、cache_n=命中）
+    await p2.stop();
+    backend.closeAllConnections();
+    await new Promise<void>((r) => backend.close(() => r()));
+  });
+
+  it('kvmem fork 格式：SSE 尾部 usage 无 prompt_tokens_details（fork 有意省略防双重计数）→ prompt_cache_hit_tokens / prompt_tokens', async () => {
+    const backend = http.createServer((req, res) => {
+      if (req.url?.startsWith('/v1/chat/completions')) {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.write('data: {"choices":[{"delta":{"content":"A"}}]}\n\n');
+        res.write('data: {"choices":[],"usage":{"prompt_tokens":165015,"completion_tokens":10,"total_tokens":165025,"prompt_cache_hit_tokens":163906}}\n\n');
+        res.write('data: [DONE]\n\n');
+        res.end();
+      } else {
+        res.writeHead(404, { 'content-type': 'text/plain' });
+        res.end('not found');
+      }
+    });
+    await new Promise<void>((r) => backend.listen(0, '127.0.0.1', r));
+    const bport = (backend.address() as { port: number }).port;
+    const p2port = await probeFreePort(61500, 61999);
+    const c2 = new FakeController();
+    c2.port = bport;
+    c2.ready = true;
+    c2.current = 'm1';
+    c2.models = [ref('m1')];
+    const s2: RequestStats[] = [];
+    const p2 = new LauncherProxy({ host: '127.0.0.1', port: p2port, controller: c2, form: { ...DEFAULT_FORM }, onStats: (s) => s2.push(s) });
+    await p2.start();
+    const res = await postJson(p2port, '/v1/chat/completions', { model: 'm1', messages: [{ role: 'user', content: 'hi' }], stream: true });
+    expect(res.status).toBe(200);
+    expect(s2.length).toBe(1);
+    expect(s2[0].cacheHitRate).toBeCloseTo(163906 / 165015); // fork 字段优先于 timings 回退
+    await p2.stop();
+    backend.closeAllConnections();
+    await new Promise<void>((r) => backend.close(() => r()));
+  });
+
+  it('usage 只有 prompt_tokens（无 details 也无 fork 字段）→ 回退 timings：cache_n / (cache_n + prompt_n)', async () => {
+    const backend = http.createServer((req, res) => {
+      if (req.url?.startsWith('/v1/chat/completions')) {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.write('data: {"choices":[{"delta":{"content":"A"}}]}\n\n');
+        res.write('data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":5,"total_tokens":105},"timings":{"prompt_ms":100,"prompt_n":75,"eval_ms":10,"eval_n":5,"cache_n":25}}\n\n');
+        res.write('data: [DONE]\n\n');
+        res.end();
+      } else {
+        res.writeHead(404, { 'content-type': 'text/plain' });
+        res.end('not found');
+      }
+    });
+    await new Promise<void>((r) => backend.listen(0, '127.0.0.1', r));
+    const bport = (backend.address() as { port: number }).port;
+    const p2port = await probeFreePort(61500, 61999);
+    const c2 = new FakeController();
+    c2.port = bport;
+    c2.ready = true;
+    c2.current = 'm1';
+    c2.models = [ref('m1')];
+    const s2: RequestStats[] = [];
+    const p2 = new LauncherProxy({ host: '127.0.0.1', port: p2port, controller: c2, form: { ...DEFAULT_FORM }, onStats: (s) => s2.push(s) });
+    await p2.start();
+    const res = await postJson(p2port, '/v1/chat/completions', { model: 'm1', messages: [{ role: 'user', content: 'hi' }], stream: true });
+    expect(res.status).toBe(200);
+    expect(s2.length).toBe(1);
+    expect(s2[0].cacheHitRate).toBeCloseTo(0.25); // 25 / (25 + 75)
     await p2.stop();
     backend.closeAllConnections();
     await new Promise<void>((r) => backend.close(() => r()));
