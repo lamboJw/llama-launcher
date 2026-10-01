@@ -8,11 +8,12 @@ Windows 桌面版 llama-server 启动器（Electron + TypeScript）。一条命�
 - **启动 llama-server**：托管版本（自动下载 llama.cpp release 到 `llama.cpp/` 目录）或自定义 exe 路径；自动探测 CUDA 目录并注入子进程 PATH；启动后轮询 `/health` 确认就绪
 - **反向代理**：server 永远只绑 `127.0.0.1` 内部端口，用户通过可见端口（默认 8080）访问；支持 API Key 鉴权、CORS、SSE 透传
 - **自动切换模型**：开启后代理按请求的 `model` 字段自动切换后端模型（切换期间请求排队）
-- **参数表单**：模型 / 服务 / 硬件 / 上下文 / 采样 / 投机解码（MTP）/ 高级 七组，覆盖 llama-server 常用参数；留空 = 不传（用 llama.cpp 默认值）
+- **参数表单**：模型 / 服务 / 硬件 / 上下文 / 采样 / 投机解码（MTP）/ 高级 / KVMem 八组，覆盖 llama-server 常用参数；留空 = 不传（用 llama.cpp 默认值）。KVMem 组仅在「llama.cpp 版本」选中 `kvmem-*` 时显示
 - **参数档案（profiles）**：每个模型一份参数快照，启动时自动保存，切换模型自动应用
 - **轮次记录**：可选记录每轮 prompt/decode 的 token 与耗时，倒序分页查看
-- **请求统计**：最近请求与历史统计（耗时、token 数）
-- **llama.cpp 版本管理**：检查 GitHub release、下载安装、多版本共存、版本横幅提示
+- **请求统计**：最近请求与历史统计（耗时、token 数、缓存命中率）
+- **llama.cpp 版本管理**：检查 GitHub release、下载安装、多版本共存、版本横幅提示；支持 kvmem 定制构建（手动放置到 `llama.cpp/kvmem/<版本段>/`，版本下拉显示 `kvmem-<版本段>`，不参与自动更新）
+- **fork 兼容**：启动前探测 exe `--help`，自动移除该版本不支持的参数（kvmem 等 fork 与 b 版本参数面不同时仍可启动）
 - **可设置数据目录**：config / profiles / records 的保存位置可在设置中修改（默认 `app_data/`），修改后重启生效；首次启动自动迁移旧版 `%APPDATA%` 数据
 
 ## 开发
@@ -20,7 +21,7 @@ Windows 桌面版 llama-server 启动器（Electron + TypeScript）。一条命�
 ```bash
 npm install
 npm run dev        # 构建 + 启动 Electron
-npm test           # vitest（168 个测试）
+npm test           # vitest（240 个测试）
 npm run typecheck  # tsc --noEmit
 ```
 
@@ -38,14 +39,14 @@ npm run package
 src/
   main/        主进程：config、args（命令行组装）、server-controller、
                process-manager、proxy（反向代理）、profiles、records、
-               updater、scan（本地/HF 模型扫描）、stats
+               updater、scan（本地/HF 模型扫描）、stats、kvmem（kvmem 版本发现）
   preload/     预加载桥
   renderer/    渲染层：表单 UI、日志（ANSI 着色）、统计面板
   shared/      主/渲染共享类型（FormValues 等）
 test/          vitest 测试（纯 Node，不依赖 Electron）
 scripts/       copy-assets、zip-release
 docs/          设计规格与实施计划
-llama.cpp/     托管的 llama.cpp 版本与 CUDA 目录（运行时生成，不入库）
+llama.cpp/     托管的 llama.cpp 版本与 CUDA 目录；kvmem/<版本段>/ 为手动放置的 kvmem 构建（运行时生成，不入库）
 app_data/      应用数据：config.json、profiles/、records/、userData/（运行时生成，不入库）
 ```
 
