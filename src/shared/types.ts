@@ -49,6 +49,8 @@ export interface FormValues {
   repeatPenalty: string; presencePenalty: string; frequencyPenalty: string;
   repeatLastN: string; seed: string; ignoreEos: boolean;
   reasoningEffort: string; reasoningPreserve: boolean;
+  enableThinking: boolean; noThink: boolean;
+  reasoningBudget: string; reasoningBudgetMessage: string;
   // 投机解码 (MTP) 组
   specType: string; specDraftModel: string; specDraftHf: string;
   specDraftNMax: string; specDraftNMin: string; specDraftNgl: string;
@@ -56,6 +58,19 @@ export interface FormValues {
   specDraftTypeK: string; specDraftTypeV: string;
   specNgramModNMatch: string; specNgramModNMin: string; specNgramModNMax: string;
   specDefault: boolean;
+  specKvDtype: string;
+  // KVMem 组（规格 §4.1，仅选中 kvmem 版本时可见）
+  kvmem: boolean;
+  kvmemTrace: boolean; kvmemHarvestV: boolean; kvmemRawKNvme: boolean;
+  kvmemBudget: string; kvmemBlockTokens: string; kvmemSinkTokens: string;
+  kvmemGenReserve: string; kvmemRecentTokens: string;
+  kvmemMethod: string; kvmemQueryLast: string; kvmemQueryMaxTokens: string;
+  kvmemQueryReplay: string; kvmemQueryPolicy: string; kvmemMtpState: string;
+  kvmemGpuRatio: string; kvmemCpuGb: string; kvmemNvmeGb: string; kvmemNvmeDir: string;
+  kvmemConversations: string; kvmemConversationsGb: string;
+  kvmemSessionRamGb: string; kvmemSessionNvmeGb: string; kvmemSessionCacheDir: string;
+  // 硬件组（kvmem 家族）
+  kvDtype: string;
   // 高级组
   verbosity: string; warmup: boolean; contextShift: boolean; cacheReuse: string;
   perf: boolean; logJsonl: boolean; logPromptsDir: string; mcpServersConfig: string;

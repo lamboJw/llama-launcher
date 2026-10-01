@@ -29,6 +29,7 @@ export const DEFAULT_FORM: FormValues = {
   repeatPenalty: '', presencePenalty: '', frequencyPenalty: '',
   repeatLastN: '', seed: '', ignoreEos: false,
   reasoningEffort: '', reasoningPreserve: false,
+  enableThinking: false, noThink: false, reasoningBudget: '', reasoningBudgetMessage: '',
   // 投机解码 (MTP) 组
   specType: '', specDraftModel: '', specDraftHf: '',
   specDraftNMax: '', specDraftNMin: '', specDraftNgl: '',
@@ -36,6 +37,19 @@ export const DEFAULT_FORM: FormValues = {
   specDraftTypeK: '', specDraftTypeV: '',
   specNgramModNMatch: '24', specNgramModNMin: '48', specNgramModNMax: '64',
   specDefault: false,
+  specKvDtype: '',
+  // KVMem 组（规格 §4.1）
+  kvmem: true,
+  kvmemTrace: false, kvmemHarvestV: false, kvmemRawKNvme: false,
+  kvmemBudget: '', kvmemBlockTokens: '', kvmemSinkTokens: '',
+  kvmemGenReserve: '', kvmemRecentTokens: '',
+  kvmemMethod: '', kvmemQueryLast: '', kvmemQueryMaxTokens: '',
+  kvmemQueryReplay: '', kvmemQueryPolicy: '', kvmemMtpState: '',
+  kvmemGpuRatio: '', kvmemCpuGb: '', kvmemNvmeGb: '', kvmemNvmeDir: '',
+  kvmemConversations: '', kvmemConversationsGb: '',
+  kvmemSessionRamGb: '', kvmemSessionNvmeGb: '', kvmemSessionCacheDir: '',
+  // 硬件组（kvmem 家族）
+  kvDtype: '',
   // 高级组
   verbosity: '', warmup: true, contextShift: false, cacheReuse: '',
   perf: false, logJsonl: false, logPromptsDir: '', mcpServersConfig: '',
@@ -122,7 +136,8 @@ export function migrateLegacyData(oldDir: string, newDir: string): void {
  * 新字段缺失 → 补默认空串
  */
 export function migrateForm(f: FormValues): FormValues {
-  const o: FormValues = { ...f };
+  // 缺失字段（含 kvmem 等新字段）→ 补 DEFAULT_FORM 默认值（规格 §4）
+  const o: FormValues = { ...DEFAULT_FORM, ...f };
   const any = o as unknown as Record<string, unknown>;
   if (typeof any.fit === 'boolean') any.fit = (any.fit as boolean) ? 'on' : 'off';
   if (typeof any.cacheReuse === 'boolean') any.cacheReuse = '';

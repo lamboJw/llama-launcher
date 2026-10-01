@@ -81,6 +81,7 @@ const GROUPS: { title: string; fields: FieldSpec[] }[] = [
     { id: 'cacheTypeV', label: 'V 缓存类型', type: 'text' },
     { id: 'nCpuMoE', label: 'CPU MoE 专家数', type: 'text' },
     { id: 'nCpuFfn', label: 'CPU FFN 层数 (n-cpu-ffn)', type: 'text' },
+    { id: 'kvDtype', label: 'KV 量化 (kv-dtype)', type: 'select', options: [['', '默认(不传)'], ['q8_0', 'q8_0'], ['q4_0', 'q4_0'], ['q4_1', 'q4_1'], ['q5_0', 'q5_0'], ['q5_1', 'q5_1'], ['bf16', 'bf16'], ['f16', 'f16']] },
   ]},
   { title: '上下文', fields: [
     { id: 'ctxSize', label: '上下文长度 (ctx-size)', type: 'text' },
@@ -110,6 +111,10 @@ const GROUPS: { title: string; fields: FieldSpec[] }[] = [
     { id: 'ignoreEos', label: 'ignore-eos', type: 'checkbox' },
     { id: 'reasoningEffort', label: 'reasoning-effort', type: 'text' },
     { id: 'reasoningPreserve', label: 'reasoning-preserve', type: 'checkbox' },
+    { id: 'enableThinking', label: '启用 thinking (enable-thinking)', type: 'checkbox' },
+    { id: 'noThink', label: '禁止思考 (no-think)', type: 'checkbox' },
+    { id: 'reasoningBudget', label: '思考预算 (reasoning-budget)', type: 'text' },
+    { id: 'reasoningBudgetMessage', label: '预算提示词 (reasoning-budget-message)', type: 'text' },
   ]},
   { title: '投机解码 (MTP)', fields: [
     { id: 'specDefault', label: '默认启用 (spec-default)', type: 'checkbox' },
@@ -127,6 +132,7 @@ const GROUPS: { title: string; fields: FieldSpec[] }[] = [
     { id: 'specNgramModNMatch', label: 'ngram-mod n-match (spec-ngram-mod-n-match)', type: 'text' },
     { id: 'specNgramModNMin', label: 'ngram-mod n-min (spec-ngram-mod-n-min)', type: 'text' },
     { id: 'specNgramModNMax', label: 'ngram-mod n-max (spec-ngram-mod-n-max)', type: 'text' },
+    { id: 'specKvDtype', label: 'spec KV 量化 (spec-kv-dtype)', type: 'select', options: [['', '默认(不传)'], ['f16', 'f16'], ['bf16', 'bf16'], ['q8_0', 'q8_0'], ['q4_0', 'q4_0']] },
   ]},
   { title: '高级', fields: [
     { id: 'verbosity', label: '日志详细程度', type: 'select', options: [['', '默认(3=INFO)'], ['0', '0（generic output）'], ['1', '1（error）'], ['2', '2（warning）'], ['3', '3（INFO）'], ['4', '4（TRACE）'], ['5', '5（DEBUG）']] },
@@ -140,6 +146,32 @@ const GROUPS: { title: string; fields: FieldSpec[] }[] = [
     { id: 'mtmdBatchMaxTokens', label: 'mtmd batch 最大 token', type: 'text' },
     { id: 'specDraftBackendSampling', label: 'spec draft 后端采样', type: 'checkbox' },
     { id: 'extraArgs', label: '额外参数（原样追加）', type: 'text' },
+  ]},
+  { title: 'KVMem', fields: [
+    { id: 'kvmem', label: '启用 KVMem (kvmem)', type: 'checkbox' },
+    { id: 'kvmemTrace', label: '追踪 (kvmem-trace)', type: 'checkbox' },
+    { id: 'kvmemHarvestV', label: '收获 V 缓存 (kvmem-harvest-v)', type: 'checkbox' },
+    { id: 'kvmemRawKNvme', label: 'K/V 直通 NVMe (kvmem-raw-k-nvme)', type: 'checkbox' },
+    { id: 'kvmemBudget', label: '内存预算 token 数 (kvmem-budget)', type: 'text' },
+    { id: 'kvmemBlockTokens', label: '分块大小 (kvmem-block-tokens)', type: 'text' },
+    { id: 'kvmemSinkTokens', label: '常驻 token 数 (kvmem-sink-tokens)', type: 'text' },
+    { id: 'kvmemGenReserve', label: '生成预留 token (kvmem-gen-reserve)', type: 'text' },
+    { id: 'kvmemRecentTokens', label: '常驻窗口 token (kvmem-recent-tokens)', type: 'text' },
+    { id: 'kvmemMethod', label: '检索方式 (kvmem-method)', type: 'select', options: [['', '默认(不传)'], ['recency', 'recency'], ['retrieval', 'retrieval']] },
+    { id: 'kvmemQueryLast', label: '查询最近 N token (kvmem-query-last)', type: 'text' },
+    { id: 'kvmemQueryMaxTokens', label: '查询最大 token (kvmem-query-max-tokens)', type: 'text' },
+    { id: 'kvmemQueryReplay', label: '查询重放 (kvmem-query-replay)', type: 'select', options: [['', '默认(不传)'], ['legacy', 'legacy'], ['auto', 'auto']] },
+    { id: 'kvmemQueryPolicy', label: '查询策略 (kvmem-query-policy)', type: 'select', options: [['', '默认(不传)'], ['legacy', 'legacy'], ['user', 'user']] },
+    { id: 'kvmemMtpState', label: 'MTP 状态 (kvmem-mtp-state)', type: 'select', options: [['', '默认(不传)'], ['snapshots', 'snapshots'], ['auto', 'auto'], ['replay', 'replay']] },
+    { id: 'kvmemGpuRatio', label: 'GPU 占比 (kvmem-gpu-ratio)', type: 'text' },
+    { id: 'kvmemCpuGb', label: 'CPU 内存 GB (kvmem-cpu-gb)', type: 'text' },
+    { id: 'kvmemNvmeGb', label: 'NVMe GB (kvmem-nvme-gb)', type: 'text' },
+    { id: 'kvmemNvmeDir', label: 'NVMe 目录 (kvmem-nvme-dir)', type: 'text' },
+    { id: 'kvmemConversations', label: '保留会话数 (kvmem-conversations)', type: 'text' },
+    { id: 'kvmemConversationsGb', label: '会话配额 GB (kvmem-conversations-gb)', type: 'text' },
+    { id: 'kvmemSessionRamGb', label: '会话 RAM GB (kvmem-session-ram-gb)', type: 'text' },
+    { id: 'kvmemSessionNvmeGb', label: '会话 NVMe GB (kvmem-session-nvme-gb)', type: 'text' },
+    { id: 'kvmemSessionCacheDir', label: '会话缓存目录 (kvmem-session-cache-dir)', type: 'text' },
   ]},
 ];
 
@@ -171,6 +203,7 @@ function buildForm(): void {
   for (const g of GROUPS) {
     const det = document.createElement('details');
     det.open = g.title === '模型' || g.title === '服务';
+    if (g.title === 'KVMem') det.id = 'group-kvmem'; // 条件可见（规格 §7）
     const sum = document.createElement('summary');
     sum.textContent = g.title;
     det.appendChild(sum);
@@ -279,6 +312,7 @@ function buildExeField(): HTMLElement {
     const custom = sel.value === '__custom__';
     row2.style.display = custom ? 'grid' : 'none';
     form.exeSelection = custom ? input.value : sel.value;
+    syncKvmemVisibility();
     scheduleSave();
   };
   sel.addEventListener('change', sync);
@@ -320,6 +354,14 @@ function fillExeOptions(): void {
 }
 
 // ---------- 表单填充 ----------
+/** KVMem 组仅在选中 kvmem 版本时可见（规格 §7） */
+function syncKvmemVisibility(): void {
+  const det = document.getElementById('group-kvmem');
+  if (!det) return;
+  const on = (form?.exeSelection ?? '').trim().startsWith('kvmem-');
+  det.style.display = on ? '' : 'none';
+}
+
 function populateForm(): void {
   if (!form) return;
   for (const g of GROUPS) {
@@ -348,6 +390,7 @@ function populateForm(): void {
   autoSwitchBox.checked = form.autoSwitch;
   fillExeOptions();
   (document.getElementById('exe-select') as HTMLSelectElement & { __sync?: () => void })?.__sync?.();
+  syncKvmemVisibility();
 }
 
 // ---------- 保存（防抖 600ms，成功后提示「已自动保存」） ----------

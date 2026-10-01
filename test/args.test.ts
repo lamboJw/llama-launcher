@@ -26,6 +26,18 @@ const BASE: FormValues = {
   mtmdBatchMaxTokens: '', specDraftBackendSampling: false, extraArgs: '',
   autoSwitch: false, hfCacheDir: '', recordRounds: false,
   scanDir: '', exeSelection: '', recordsMaxTotalBytes: 1073741824,
+  dataDir: '',
+  // KVMem 组（规格 §4.1）
+  kvmem: true, kvmemTrace: false, kvmemHarvestV: false, kvmemRawKNvme: false,
+  kvmemBudget: '', kvmemBlockTokens: '', kvmemSinkTokens: '', kvmemGenReserve: '',
+  kvmemRecentTokens: '', kvmemMethod: '', kvmemQueryLast: '', kvmemQueryMaxTokens: '',
+  kvmemQueryReplay: '', kvmemQueryPolicy: '', kvmemMtpState: '', kvmemGpuRatio: '',
+  kvmemCpuGb: '', kvmemNvmeGb: '', kvmemNvmeDir: '', kvmemConversations: '',
+  kvmemConversationsGb: '', kvmemSessionRamGb: '', kvmemSessionNvmeGb: '', kvmemSessionCacheDir: '',
+  // 硬件 +1 / 采样 +4 / MTP +1（规格 §4.2-§4.4）
+  kvDtype: '',
+  enableThinking: false, noThink: false, reasoningBudget: '', reasoningBudgetMessage: '',
+  specKvDtype: '',
 };
 
 const LOCAL: ModelRef = {
@@ -261,6 +273,79 @@ describe('buildArgs', () => {
   it('throws on incomplete model ref', () => {
     expect(() => buildArgs(BASE, { name: 'x', source: 'local' }, 59999)).toThrow();
     expect(() => buildArgs(BASE, { name: 'x', source: 'hf' }, 59999)).toThrow();
+  });
+});
+
+describe('kvmem 字段（规格 §4/§5）', () => {
+  const FULL: FormValues = {
+    ...BASE,
+    kvmem: true, kvmemTrace: true, kvmemHarvestV: true, kvmemRawKNvme: true,
+    kvmemBudget: '36864', kvmemBlockTokens: '128', kvmemSinkTokens: '64',
+    kvmemGenReserve: '32768', kvmemRecentTokens: '4096', kvmemMethod: 'retrieval',
+    kvmemQueryLast: '32', kvmemQueryMaxTokens: '8192', kvmemQueryReplay: 'auto',
+    kvmemQueryPolicy: 'user', kvmemMtpState: 'snapshots', kvmemGpuRatio: '0.8',
+    kvmemCpuGb: '24', kvmemNvmeGb: '128', kvmemNvmeDir: 'F:/kvmem',
+    kvmemConversations: '2', kvmemConversationsGb: '8', kvmemSessionRamGb: '16',
+    kvmemSessionNvmeGb: '64', kvmemSessionCacheDir: 'F:/slot_cache',
+    kvDtype: 'q8_0', specKvDtype: 'bf16',
+    enableThinking: true, noThink: true, reasoningBudget: '16000',
+    reasoningBudgetMessage: 'think hard',
+  };
+
+  it('kvmem 勾选 → --kvmem；取消 → --no-kvmem', () => {
+    expect(buildArgs({ ...BASE, kvmem: true }, LOCAL, 59999).argv).toContain('--kvmem');
+    expect(buildArgs({ ...BASE, kvmem: false }, LOCAL, 59999).argv).toContain('--no-kvmem');
+    expect(buildArgs({ ...BASE, kvmem: false }, LOCAL, 59999).argv).not.toContain('--kvmem');
+  });
+
+  it('kvmem 开关族（trace/harvest-v/raw-k-nvme）勾选才传', () => {
+    const { argv } = buildArgs({ ...BASE, kvmemTrace: true, kvmemHarvestV: true, kvmemRawKNvme: true }, LOCAL, 59999);
+    expect(argv).toContain('--kvmem-trace');
+    expect(argv).toContain('--kvmem-harvest-v');
+    expect(argv).toContain('--kvmem-raw-k-nvme');
+    const none = buildArgs(BASE, LOCAL, 59999).argv;
+    for (const f of ['--kvmem-trace', '--kvmem-harvest-v', '--kvmem-raw-k-nvme']) expect(none).not.toContain(f);
+  });
+
+  it('kvmem text/select 字段：有值成对传，空不传', () => {
+    const { argv } = buildArgs(FULL, LOCAL, 59999);
+    const pairs: [string, string][] = [
+      ['--kvmem-budget', '36864'], ['--kvmem-block-tokens', '128'], ['--kvmem-sink-tokens', '64'],
+      ['--kvmem-gen-reserve', '32768'], ['--kvmem-recent-tokens', '4096'], ['--kvmem-method', 'retrieval'],
+      ['--kvmem-query-last', '32'], ['--kvmem-query-max-tokens', '8192'], ['--kvmem-query-replay', 'auto'],
+      ['--kvmem-query-policy', 'user'], ['--kvmem-mtp-state', 'snapshots'], ['--kvmem-gpu-ratio', '0.8'],
+      ['--kvmem-cpu-gb', '24'], ['--kvmem-nvme-gb', '128'], ['--kvmem-nvme-dir', 'F:/kvmem'],
+      ['--kvmem-conversations', '2'], ['--kvmem-conversations-gb', '8'], ['--kvmem-session-ram-gb', '16'],
+      ['--kvmem-session-nvme-gb', '64'], ['--kvmem-session-cache-dir', 'F:/slot_cache'],
+      ['--kv-dtype', 'q8_0'], ['--spec-kv-dtype', 'bf16'],
+      ['--reasoning-budget', '16000'], ['--reasoning-budget-message', 'think hard'],
+    ];
+    for (const [flag, val] of pairs) expect(hasPair(argv, flag, val), flag).toBe(true);
+    const none = buildArgs(BASE, LOCAL, 59999).argv;
+    for (const [flag] of pairs) expect(none, flag).not.toContain(flag);
+  });
+
+  it('thinking 开关：勾选才传', () => {
+    const { argv } = buildArgs({ ...BASE, enableThinking: true, noThink: true }, LOCAL, 59999);
+    expect(argv).toContain('--enable-thinking');
+    expect(argv).toContain('--no-think');
+    const none = buildArgs(BASE, LOCAL, 59999).argv;
+    expect(none).not.toContain('--enable-thinking');
+    expect(none).not.toContain('--no-think');
+  });
+
+  it('argToField 覆盖全部新旗标', () => {
+    const { argToField } = buildArgs(FULL, LOCAL, 59999);
+    expect(argToField['--kvmem']).toBe('kvmem');
+    expect(argToField['--no-kvmem']).toBe('kvmem');
+    expect(argToField['--kvmem-budget']).toBe('kvmemBudget');
+    expect(argToField['--kvmem-method']).toBe('kvmemMethod');
+    expect(argToField['--kv-dtype']).toBe('kvDtype');
+    expect(argToField['--spec-kv-dtype']).toBe('specKvDtype');
+    expect(argToField['--enable-thinking']).toBe('enableThinking');
+    expect(argToField['--no-think']).toBe('noThink');
+    expect(argToField['--reasoning-budget-message']).toBe('reasoningBudgetMessage');
+    expect(argToField['--kvmem-session-cache-dir']).toBe('kvmemSessionCacheDir');
   });
 });
 

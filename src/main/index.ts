@@ -17,6 +17,7 @@ import { StatsStore } from './stats.js';
 import { RoundTracker, parseTimingLine } from './log-parser.js';
 import { checkLatestRelease, runUpdate, readManifest, autoDiscoverVersions, type ReleaseInfo } from './updater.js';
 import { parseVersion, versionBanner, BASELINE_BUILD } from './version.js';
+import { scanKvmemVersions, kvmemExePath } from './kvmem.js';
 import type {
   FormValues, HfModel, InstalledVersion, LocalModel, ModelRef, ParsedVersion,
   RequestStats, RoundStats, UpdateProgress,
@@ -152,8 +153,23 @@ function resolveExe(form: FormValues): { exe: string; cudaDir: string | null; fa
     if (!entry) throw new Error(`托管版本 ${sel} 未安装（点"立即更新"安装）`);
     return { ...managedPath(entry), fallbackCudaDirs: [] };
   }
+  // kvmem 定制构建（规格 §6）：llama.cpp/kvmem/<段>/；自带 CUDA DLL 不注入
+  if (sel.startsWith('kvmem-')) {
+    const seg = sel.slice('kvmem-'.length);
+    const exe = kvmemExePath(path.join(llamaBaseDir(), 'kvmem', seg));
+    if (!exe) throw new Error(`kvmem 版本 ${sel} 未找到可执行文件：请确认 llama.cpp/kvmem/${seg}/ 下有 llama-kvmem-server.exe`);
+    return { exe, cudaDir: null, fallbackCudaDirs: [] };
+  }
   // 自定义路径：托管 CUDA 目录存在则作为兜底注入（尽力而为）
   return { exe: sel, cudaDir: null, fallbackCudaDirs: findManagedCudaDirs() };
+}
+
+/** kvmem 选中 → 版本文案（规格 §6：跳过 --version 探测，kvmem 不支持） */
+function kvmemBanner(sel: string): boolean {
+  if (!sel.startsWith('kvmem-')) return false;
+  versionInfo = null;
+  versionMsg = `KVMem 定制构建 ${sel}`;
+  return true;
 }
 
 function probeVersion(exe: string): Promise<ParsedVersion> {
@@ -179,7 +195,10 @@ async function refreshInstalled(): Promise<void> {
     let entries = await readManifest(llamaBaseDir());
     // manifest 缺失（手动安装 / 软链进 llama.cpp 目录）→ 自动发现版本目录并登记
     if (entries.length === 0) entries = await autoDiscoverVersions({ baseDir: llamaBaseDir() });
-    installed = entries;
+    // kvmem 定制构建（规格 §6）：llama.cpp/kvmem/* 并入列表（不写 manifest）
+    const kvmem = scanKvmemVersions(llamaBaseDir())
+      .map((v): InstalledVersion => ({ tag: v.tag, cudaVersion: null, installedAt: 0, valid: true }));
+    installed = [...entries, ...kvmem];
   } catch { installed = []; }
 }
 
@@ -206,9 +225,11 @@ async function startServer(form: FormValues, model: ModelRef): Promise<void> {
   const key = model.local ? model.local.path : model.name;
   await profiles.save(key, form);
   config.saveSettings({ form, lastModel: model.name }); // 记住上次使用的模型
-  // 版本探针 + 横幅（规格 §9.1）
-  versionInfo = await probeVersion(exe);
-  versionMsg = versionBanner(versionInfo);
+  // 版本探针 + 横幅（规格 §9.1；kvmem 跳过探测，规格 §6）
+  if (!kvmemBanner(form.exeSelection.trim())) {
+    versionInfo = await probeVersion(exe);
+    versionMsg = versionBanner(versionInfo);
+  }
   refreshBanner();
   // slot 上下文自动保存/恢复（设计规格 §3）：slotSavePath 非空且目录可创建才启用
   {
@@ -319,8 +340,10 @@ function registerIpc(): void {
     if (form.exeSelection !== prev.exeSelection) {
       try {
         const { exe } = resolveExe(form);
-        versionInfo = await probeVersion(exe);
-        versionMsg = versionBanner(versionInfo);
+        if (!kvmemBanner(form.exeSelection.trim())) {
+          versionInfo = await probeVersion(exe);
+          versionMsg = versionBanner(versionInfo);
+        }
       } catch { versionInfo = null; versionMsg = null; }
       refreshBanner();
     }
@@ -365,13 +388,16 @@ function registerIpc(): void {
     });
     await refreshInstalled();
     if (res.ok && res.valid) {
-      config.updateForm({ exeSelection: release.tag_name }); // 更新后自动选中（规格 §9.2）
       updateMsg = null;
-      const entry = installed.find((v) => v.tag === release.tag_name);
-      if (entry) {
-        const { exe } = managedPath(entry);
-        versionInfo = await probeVersion(exe);
-        versionMsg = versionBanner(versionInfo);
+      // 当前选中 kvmem → 保留 kvmem 选择，不自动切到新 b 版（规格 §6 更新守卫）
+      if (!form.exeSelection.trim().startsWith('kvmem-')) {
+        config.updateForm({ exeSelection: release.tag_name }); // 更新后自动选中（规格 §9.2）
+        const entry = installed.find((v) => v.tag === release.tag_name);
+        if (entry) {
+          const { exe } = managedPath(entry);
+          versionInfo = await probeVersion(exe);
+          versionMsg = versionBanner(versionInfo);
+        }
       }
       refreshBanner();
     }

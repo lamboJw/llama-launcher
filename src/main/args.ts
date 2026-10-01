@@ -114,6 +114,7 @@ export function buildArgs(form: FormValues, model: ModelRef, internalPort: numbe
   str('cacheTypeV', '--cache-type-v');
   str('nCpuMoE', '--n-cpu-moe');
   str('nCpuFfn', '--n-cpu-ffn');
+  str('kvDtype', '--kv-dtype');
 
   // 上下文组
   str('ctxSize', '--ctx-size');
@@ -145,6 +146,10 @@ export function buildArgs(form: FormValues, model: ModelRef, internalPort: numbe
   onFlag('ignoreEos', '--ignore-eos');
   str('reasoningEffort', '--reasoning-effort');
   bool('reasoningPreserve', '--reasoning-preserve');
+  onFlag('enableThinking', '--enable-thinking');
+  onFlag('noThink', '--no-think');
+  str('reasoningBudget', '--reasoning-budget');
+  str('reasoningBudgetMessage', '--reasoning-budget-message');
 
   // 投机解码 (MTP) 组
   const specTypes = form.specType.split(',').map(s => s.trim()).filter(s => s !== '');
@@ -168,6 +173,7 @@ export function buildArgs(form: FormValues, model: ModelRef, internalPort: numbe
     str('specNgramModNMax', '--spec-ngram-mod-n-max');
   }
   onFlag('specDefault', '--spec-default');
+  str('specKvDtype', '--spec-kv-dtype');
 
   // 高级组
   str('verbosity', '--verbosity');
@@ -180,6 +186,32 @@ export function buildArgs(form: FormValues, model: ModelRef, internalPort: numbe
   str('mcpServersConfig', '--mcp-servers-config');
   str('mtmdBatchMaxTokens', '--mtmd-batch-max-tokens');
   bool('specDraftBackendSampling', '--spec-draft-backend-sampling');
+
+  // KVMem 组（规格 §4.1/§5）：kvmem 有 --no- 变体（bool 输出），其余纯加不加
+  bool('kvmem', '--kvmem');
+  onFlag('kvmemTrace', '--kvmem-trace');
+  onFlag('kvmemHarvestV', '--kvmem-harvest-v');
+  onFlag('kvmemRawKNvme', '--kvmem-raw-k-nvme');
+  str('kvmemBudget', '--kvmem-budget');
+  str('kvmemBlockTokens', '--kvmem-block-tokens');
+  str('kvmemSinkTokens', '--kvmem-sink-tokens');
+  str('kvmemGenReserve', '--kvmem-gen-reserve');
+  str('kvmemRecentTokens', '--kvmem-recent-tokens');
+  str('kvmemMethod', '--kvmem-method');
+  str('kvmemQueryLast', '--kvmem-query-last');
+  str('kvmemQueryMaxTokens', '--kvmem-query-max-tokens');
+  str('kvmemQueryReplay', '--kvmem-query-replay');
+  str('kvmemQueryPolicy', '--kvmem-query-policy');
+  str('kvmemMtpState', '--kvmem-mtp-state');
+  str('kvmemGpuRatio', '--kvmem-gpu-ratio');
+  str('kvmemCpuGb', '--kvmem-cpu-gb');
+  str('kvmemNvmeGb', '--kvmem-nvme-gb');
+  str('kvmemNvmeDir', '--kvmem-nvme-dir');
+  str('kvmemConversations', '--kvmem-conversations');
+  str('kvmemConversationsGb', '--kvmem-conversations-gb');
+  str('kvmemSessionRamGb', '--kvmem-session-ram-gb');
+  str('kvmemSessionNvmeGb', '--kvmem-session-nvme-gb');
+  str('kvmemSessionCacheDir', '--kvmem-session-cache-dir');
 
   // 强制参数（用户不可改，追加尾部；server 永远只绑 127.0.0.1 内部端口）
   argv.push('--log-colors', 'on', '--metrics', '--host', '127.0.0.1', '--port', String(internalPort));

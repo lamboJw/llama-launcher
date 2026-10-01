@@ -49,6 +49,11 @@ describe('AppConfig', () => {
     expect(f.hfCacheDir.length).toBeGreaterThan(0);
     expect(f.timeout).toBe('');
     expect(f.dataDir).toBe('');
+    expect(f.kvmem).toBe(true); // KVMem 默认启用（规格 §4.1）
+    expect(f.kvmemBudget).toBe('');
+    expect(f.kvDtype).toBe('');
+    expect(f.enableThinking).toBe(false);
+    expect(f.specKvDtype).toBe('');
   });
 
   it('updateForm patches and persists across instances', () => {
@@ -127,6 +132,22 @@ describe('migrateForm（旧版布尔配置迁移）', () => {
     const f = migrateForm({ ...DEFAULT_FORM } as Record<string, unknown> as FormValues);
     delete (f as Record<string, unknown>).dataDir;
     expect(migrateForm(f).dataDir).toBe('');
+  });
+
+  it('旧配置缺失 kvmem 30 个新字段 → 补 DEFAULT_FORM 默认值（规格 §4）', () => {
+    const old = { ...DEFAULT_FORM } as unknown as Record<string, unknown>;
+    for (const k of ['kvmem', 'kvmemBudget', 'kvmemMethod', 'kvDtype', 'enableThinking', 'noThink', 'reasoningBudget', 'specKvDtype']) {
+      delete old[k];
+    }
+    const f = migrateForm(old as unknown as FormValues);
+    expect(f.kvmem).toBe(true);
+    expect(f.kvmemBudget).toBe('');
+    expect(f.kvmemMethod).toBe('');
+    expect(f.kvDtype).toBe('');
+    expect(f.enableThinking).toBe(false);
+    expect(f.noThink).toBe(false);
+    expect(f.reasoningBudget).toBe('');
+    expect(f.specKvDtype).toBe('');
   });
 
   it('AppConfig 启动时迁移落盘的旧配置并写回', () => {
